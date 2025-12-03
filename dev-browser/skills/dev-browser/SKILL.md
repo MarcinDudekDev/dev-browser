@@ -105,7 +105,8 @@ await page.fill('input[name="password"]', "password123");
 await page.click('button[type="submit"]');
 
 // Wait for navigation and check state
-await page.waitForLoadState("networkidle");
+await page.waitForLoadState("load");
+await page.waitForTimeout(500); // Allow dynamic content to finish loading
 const url = page.url();
 const isLoggedIn = url.includes("/dashboard");
 console.log({ url, isLoggedIn });
@@ -158,7 +159,8 @@ await page.check('input[type="checkbox"]');
 
 ```typescript
 await page.waitForSelector(".results");
-await page.waitForLoadState("networkidle");
+await page.waitForLoadState("load");
+await page.waitForTimeout(500); // Allow dynamic content to finish loading
 await page.waitForURL("**/success");
 await page.waitForTimeout(1000); // avoid if possible
 ```
@@ -310,7 +312,8 @@ const selector = await client.getSelectorForID("main", 5);
 
 // Step 3: Click using the selector
 await page.click(selector);
-await page.waitForLoadState("networkidle");
+await page.waitForLoadState("load");
+await page.waitForTimeout(500); // Allow dynamic content to finish loading
 
 console.log("Navigated to:", page.url());
 

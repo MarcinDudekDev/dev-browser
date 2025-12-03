@@ -99,8 +99,10 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
   interface PageEntry {
     page: Page;
     targetId: string;
-    /** Map of element index to CDP backendNodeId */
-    selectorMap: Map<number, number> | null;
+    /** Map of element index to CSS selector (always available for indexed elements) */
+    cssSelectorMap: Map<number, string> | null;
+    /** Map of element index to CDP backendNodeId (may have fewer entries if CDP resolution failed) */
+    backendNodeMap: Map<number, number> | null;
     /** Version counter, incremented on each tree extraction or navigation */
     mapVersion: number;
   }
@@ -163,7 +165,7 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
       // Create new page in the persistent context (with timeout to prevent hangs)
       const page = await withTimeout(context.newPage(), 30000, "Page creation timed out after 30s");
       const targetId = await getTargetId(page);
-      entry = { page, targetId, selectorMap: null, mapVersion: 0 };
+      entry = { page, targetId, cssSelectorMap: null, backendNodeMap: null, mapVersion: 0 };
       registry.set(name, entry);
 
       // Clean up registry when page is closed (e.g., user clicks X)
@@ -171,12 +173,13 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
         registry.delete(name);
       });
 
-      // Invalidate selector map on navigation (URL change)
+      // Invalidate selector maps on navigation (URL change)
       page.on("framenavigated", (frame) => {
         if (frame === page.mainFrame()) {
           const currentEntry = registry.get(name);
           if (currentEntry) {
-            currentEntry.selectorMap = null;
+            currentEntry.cssSelectorMap = null;
+            currentEntry.backendNodeMap = null;
             currentEntry.mapVersion++;
           }
         }
@@ -214,16 +217,20 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
 
     try {
       // Extract LLM tree with backend node IDs
-      const { tree, backendNodeMap } = await getLLMTreeWithBackendIds(entry.page, context);
+      const { tree, selectorMap, backendNodeMap } = await getLLMTreeWithBackendIds(
+        entry.page,
+        context
+      );
 
-      // Update entry with new selector map
-      entry.selectorMap = backendNodeMap;
+      // Update entry with both maps
+      entry.cssSelectorMap = selectorMap;
+      entry.backendNodeMap = backendNodeMap;
       entry.mapVersion++;
 
       const response: GetLLMTreeResponse = {
         tree,
         version: entry.mapVersion,
-        elementCount: backendNodeMap.size,
+        elementCount: selectorMap.size,
       };
       res.json(response);
     } catch (err) {
@@ -251,37 +258,49 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
         return;
       }
 
-      if (!entry.selectorMap) {
+      if (!entry.cssSelectorMap) {
         res.status(400).json({
           error: "No active tree. Call POST /pages/:name/tree first.",
         });
         return;
       }
 
-      const backendNodeId = entry.selectorMap.get(index);
-      if (backendNodeId === undefined) {
+      // Check if the index exists in the CSS selector map (canonical source)
+      const cssSelector = entry.cssSelectorMap.get(index);
+      if (cssSelector === undefined) {
         res.status(404).json({
           error: `Element with index ${index} not found in current tree`,
         });
         return;
       }
 
-      try {
-        // Resolve backendNodeId to CSS selector
-        const selector = await resolveSelectorFromBackendId(entry.page, context, backendNodeId);
+      // Try to use backendNodeId for more reliable resolution
+      const backendNodeId = entry.backendNodeMap?.get(index);
 
-        const response: GetSelectorResponse = {
-          index,
-          selector,
-          backendNodeId,
-        };
-        res.json(response);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : "Unknown error";
-        res.status(500).json({
-          error: `Failed to resolve selector: ${message}. Element may no longer exist.`,
-        });
+      if (backendNodeId !== undefined) {
+        try {
+          // Resolve backendNodeId to CSS selector (preferred - more reliable)
+          const selector = await resolveSelectorFromBackendId(entry.page, context, backendNodeId);
+
+          const response: GetSelectorResponse = {
+            index,
+            selector,
+            backendNodeId,
+          };
+          res.json(response);
+          return;
+        } catch {
+          // Backend node resolution failed, fall back to CSS selector
+        }
       }
+
+      // Fall back to the original CSS selector from tree extraction
+      const response: GetSelectorResponse = {
+        index,
+        selector: cssSelector,
+        backendNodeId: backendNodeId ?? 0,
+      };
+      res.json(response);
     }
   );
 

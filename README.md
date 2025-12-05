@@ -8,11 +8,11 @@ This plugin is optimized for **testing and verifying as you develop**. Claude ca
 
 ### How It's Different
 
-| Approach                      | How It Works                                      | Tradeoff                                                                         |
-| ----------------------------- | ------------------------------------------------- | -------------------------------------------------------------------------------- |
-| **Playwright MCP**            | Observe-think-act loop with individual tool calls | Simple but slow; each action is a separate round-trip.                           |
-| **Direct Playwright scripts** | Full scripts that run end-to-end                  | Fast but fragile; scripts start fresh every time, so failures mean starting over |
-| **Dev Browser**               | Stateful server + agentic script execution        | Best of both worlds                                                              |
+| Approach                      | How It Works                                      | Tradeoff                                                                                                                                                                                 |
+| ----------------------------- | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Playwright MCP**            | Observe-think-act loop with individual tool calls | Simple but slow; each action is a separate round-trip. The MCP also takes up a lot of context window space.                                                                              |
+| **Direct Playwright scripts** | Full scripts that run end-to-end                  | Fast but fragile; scripts start fresh every time, so failures mean starting over. Very context efficient.                                                                                |
+| **Dev Browser**               | Stateful server + agentic script execution        | Best of both worlds. In between Playwright MCP and Playwright skill in terms of context efficiency. In practice it can be more context efficient because it is less likely to get stuck. |
 
 **Dev Browser** runs a persistent Playwright server that maintains browser state across script executions. This means:
 

@@ -1,12 +1,11 @@
-import { chromium, type Browser, type Page } from "playwright";
+import { chromium, type Browser, type Page, type ElementHandle } from "playwright";
 import type {
   GetPageRequest,
   GetPageResponse,
   ListPagesResponse,
   ServerInfoResponse,
-  GetLLMTreeResponse,
-  GetSelectorResponse,
 } from "./types";
+import { getSnapshotScript } from "./snapshot/browser-script";
 
 /**
  * Options for waiting for page load
@@ -213,14 +212,16 @@ export interface DevBrowserClient {
   close: (name: string) => Promise<void>;
   disconnect: () => Promise<void>;
   /**
-   * Get LLM-friendly DOM tree for a page
-   * Updates the server's selector map for the page
+   * Get AI-friendly ARIA snapshot for a page.
+   * Returns YAML format with refs like [ref=e1], [ref=e2].
+   * Refs are stored on window.__devBrowserRefs for cross-connection persistence.
    */
-  getLLMTree: (name: string) => Promise<string>;
+  getAISnapshot: (name: string) => Promise<string>;
   /**
-   * Get CSS selector for an element by its index from the last getLLMTree call
+   * Get an element handle by its ref from the last getAISnapshot call.
+   * Refs persist across Playwright connections.
    */
-  getSelectorForID: (name: string, index: number) => Promise<string>;
+  selectSnapshotRef: (name: string, ref: string) => Promise<ElementHandle | null>;
 }
 
 export async function connect(serverUrl: string): Promise<DevBrowserClient> {
@@ -292,32 +293,35 @@ export async function connect(serverUrl: string): Promise<DevBrowserClient> {
     return null;
   }
 
+  // Helper to get a page by name (used by multiple methods)
+  async function getPage(name: string): Promise<Page> {
+    // Request the page from server (creates if doesn't exist)
+    const res = await fetch(`${serverUrl}/pages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name } satisfies GetPageRequest),
+    });
+
+    if (!res.ok) {
+      throw new Error(`Failed to get page: ${await res.text()}`);
+    }
+
+    const { targetId } = (await res.json()) as GetPageResponse;
+
+    // Connect to browser
+    const b = await ensureConnected();
+
+    // Find the page by targetId
+    const page = await findPageByTargetId(b, targetId);
+    if (!page) {
+      throw new Error(`Page "${name}" not found in browser contexts`);
+    }
+
+    return page;
+  }
+
   return {
-    async page(name: string): Promise<Page> {
-      // Request the page from server (creates if doesn't exist)
-      const res = await fetch(`${serverUrl}/pages`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name } satisfies GetPageRequest),
-      });
-
-      if (!res.ok) {
-        throw new Error(`Failed to get page: ${await res.text()}`);
-      }
-
-      const { targetId } = (await res.json()) as GetPageResponse;
-
-      // Connect to browser
-      const b = await ensureConnected();
-
-      // Find the page by targetId
-      const page = await findPageByTargetId(b, targetId);
-      if (!page) {
-        throw new Error(`Page "${name}" not found in browser contexts`);
-      }
-
-      return page;
-    },
+    page: getPage,
 
     async list(): Promise<string[]> {
       const res = await fetch(`${serverUrl}/pages`);
@@ -343,28 +347,60 @@ export async function connect(serverUrl: string): Promise<DevBrowserClient> {
       }
     },
 
-    async getLLMTree(name: string): Promise<string> {
-      const res = await fetch(`${serverUrl}/pages/${encodeURIComponent(name)}/tree`, {
-        method: "POST",
-      });
+    async getAISnapshot(name: string): Promise<string> {
+      // Get the page
+      const page = await getPage(name);
 
-      if (!res.ok) {
-        throw new Error(`Failed to get LLM tree: ${await res.text()}`);
-      }
+      // Inject the snapshot script and call getAISnapshot
+      const snapshotScript = getSnapshotScript();
+      const snapshot = await page.evaluate((script: string) => {
+        // Inject script if not already present
+        // Note: page.evaluate runs in browser context where window exists
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const w = globalThis as any;
+        if (!w.__devBrowser_getAISnapshot) {
+          // eslint-disable-next-line no-eval
+          eval(script);
+        }
+        return w.__devBrowser_getAISnapshot();
+      }, snapshotScript);
 
-      const data = (await res.json()) as GetLLMTreeResponse;
-      return data.tree;
+      return snapshot;
     },
 
-    async getSelectorForID(name: string, index: number): Promise<string> {
-      const res = await fetch(`${serverUrl}/pages/${encodeURIComponent(name)}/selector/${index}`);
+    async selectSnapshotRef(name: string, ref: string): Promise<ElementHandle | null> {
+      // Get the page
+      const page = await getPage(name);
 
-      if (!res.ok) {
-        throw new Error(`Failed to get selector: ${await res.text()}`);
+      // Find the element using the stored refs
+      const elementHandle = await page.evaluateHandle(
+        (refId: string) => {
+          // Note: page.evaluateHandle runs in browser context where globalThis is the window
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const w = globalThis as any;
+          const refs = w.__devBrowserRefs;
+          if (!refs) {
+            throw new Error("No snapshot refs found. Call getAISnapshot first.");
+          }
+          const element = refs[refId];
+          if (!element) {
+            throw new Error(
+              `Ref "${refId}" not found. Available refs: ${Object.keys(refs).join(", ")}`
+            );
+          }
+          return element;
+        },
+        ref
+      );
+
+      // Check if we got an element
+      const element = elementHandle.asElement();
+      if (!element) {
+        await elementHandle.dispose();
+        return null;
       }
 
-      const data = (await res.json()) as GetSelectorResponse;
-      return data.selector;
+      return element;
     },
   };
 }

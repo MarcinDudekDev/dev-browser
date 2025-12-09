@@ -25,23 +25,3 @@ export interface ListPagesResponse {
 export interface ServerInfoResponse {
   wsEndpoint: string;
 }
-
-// LLM Tree API types
-
-export interface GetLLMTreeResponse {
-  /** Formatted tree string in browser-use format */
-  tree: string;
-  /** Version counter for the selector map */
-  version: number;
-  /** Number of interactive elements in the tree */
-  elementCount: number;
-}
-
-export interface GetSelectorResponse {
-  /** The element index that was requested */
-  index: number;
-  /** CSS selector for the element */
-  selector: string;
-  /** CDP backend node ID for the element */
-  backendNodeId: number;
-}

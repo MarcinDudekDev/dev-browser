@@ -11,7 +11,7 @@ Browser automation that maintains page state across script executions. Write sma
 
 **Local/source-available sites**: If you have access to the source code (e.g., localhost or project files), read the code first to write selectors directly—no need for multi-script discovery.
 
-**External sites**: Without source code, use `getLLMTree()` to discover elements and `getSelectorForID()` to get selectors. These work alongside standard Playwright methods.
+**External sites**: Use `getAISnapshot()` to discover elements and `selectSnapshotRef()` to interact with them. The ARIA snapshot provides semantic roles (button, link, heading) and stable refs that persist across script executions.
 
 **Visual feedback**: Take screenshots to see what the user sees and iterate on design or debug layout issues.
 
@@ -132,6 +132,10 @@ const page = await client.page("name"); // Get or create named page
 const pages = await client.list(); // List all page names
 await client.close("name"); // Close a page
 await client.disconnect(); // Disconnect (pages persist)
+
+// ARIA Snapshot methods for element discovery and interaction
+const snapshot = await client.getAISnapshot("name"); // Get ARIA accessibility tree
+const element = await client.selectSnapshotRef("name", "e5"); // Get element by ref
 ```
 
 The `page` object is a standard Playwright Page—use normal Playwright methods.
@@ -164,9 +168,14 @@ await page.screenshot({ path: "tmp/screenshot.png" });
 await page.screenshot({ path: "tmp/full.png", fullPage: true });
 ```
 
-### LLM Tree (Structured DOM Inspection)
+### ARIA Snapshot (Recommended for AI Automation)
 
-For a structured, text-based view of the page, use `getLLMTree()`. This returns a human-readable representation of interactive elements on the page, making it easier to understand page structure without parsing raw HTML.
+**This is the recommended approach for AI-driven browser automation.** `getAISnapshot()` returns a YAML-formatted accessibility tree that mirrors Playwright's internal `_snapshotForAI()` method. It provides:
+
+- **Semantic roles** (button, link, textbox, heading, etc.)
+- **Accessible names** (what screen readers would announce)
+- **Element states** (checked, disabled, expanded, etc.)
+- **Stable refs** that persist across script executions
 
 ```bash
 cd skills/dev-browser && bun x tsx <<'EOF'
@@ -178,9 +187,9 @@ const page = await client.page("main");
 await page.goto("https://news.ycombinator.com");
 await waitForPageLoad(page);
 
-// Get the LLM-friendly DOM tree
-const tree = await client.getLLMTree("main");
-console.log(tree);
+// Get the ARIA accessibility snapshot
+const snapshot = await client.getAISnapshot("main");
+console.log(snapshot);
 
 await client.disconnect();
 EOF
@@ -188,81 +197,77 @@ EOF
 
 #### Example Output
 
-The tree output shows interactive elements with numbered indices:
+The snapshot is YAML-formatted with semantic structure:
 
+```yaml
+- banner:
+  - link "Hacker News" [ref=e1]
+  - navigation:
+    - link "new" [ref=e2]
+    - link "past" [ref=e3]
+    - link "comments" [ref=e4]
+    - link "ask" [ref=e5]
+    - link "submit" [ref=e6]
+  - link "login" [ref=e7]
+- main:
+  - list:
+    - listitem:
+      - link "Article Title Here" [ref=e8]
+      - text: "528 points by username 3 hours ago"
+      - link "328 comments" [ref=e9]
+- contentinfo:
+  - textbox [ref=e10]
+    - /placeholder: "Search"
 ```
-[1]<a href="https://news.ycombinator.com" />
-[2]<a href="news">Hacker News</a>
-[3]<a href="newest">new</a>
-[4]<a href="front">past</a>
-[5]<a href="newcomments">comments</a>
-[6]<a href="ask">ask</a>
-[7]<a href="submit">submit</a>
-[8]<a href="login?goto=news">login</a>
-1.
-[9]<a id="up_46134443" href="vote?id=46134443&how=up&goto=news" />
-[10]<div class="votearrow" title="upvote" />
-[11]<a href="https://www.example.com/article">Article Title Here</a>
-528 points
-by
-[12]<a class="hnuser" href="user?id=username">username</a>
-[13]<a href="item?id=46134443">3 hours ago</a>
-[14]<a href="item?id=46134443">328 comments</a>
-...
-[256]<input type="text" name="q" autocomplete="off" />
-```
 
-#### Interpreting the Tree
+#### Interpreting the Snapshot
 
-- **`[N]`** - Interactive elements are numbered. Use these indices with `getSelectorForID()` to get CSS selectors
-- **`<tag attr="value">text</tag>`** - Element tag, key attributes, and text content
-- **Plain text** - Static text content between elements (e.g., "528 points", "by")
-- **`|SCROLL|`** - Marks scrollable containers with scroll position info
-- **`|IFRAME|`** - Marks iframe boundaries
-- **`|SHADOW(open)|`** - Marks shadow DOM roots
+- **Roles** - Semantic element types: `button`, `link`, `textbox`, `heading`, `listitem`, etc.
+- **Names** - Accessible text in quotes: `link "Click me"`, `button "Submit"`
+- **`[ref=eN]`** - Element reference for interaction. Only assigned to visible, clickable elements
+- **`[checked]`** - Checkbox/radio is checked
+- **`[disabled]`** - Element is disabled
+- **`[expanded]`** - Expandable element (details, accordion) is open
+- **`[level=N]`** - Heading level (h1=1, h2=2, etc.)
+- **`/url:`** - Link URL (shown as a property)
+- **`/placeholder:`** - Input placeholder text
 
-### Getting Selectors for Interaction
+#### Interacting with Refs
 
-Once you identify an element by its index in the tree, use `getSelectorForID()` to get a CSS selector you can use with Playwright:
+Use `selectSnapshotRef()` to get a Playwright ElementHandle for any ref:
 
 ```bash
 cd skills/dev-browser && bun x tsx <<'EOF'
-import { connect } from "@/client.js";
+import { connect, waitForPageLoad } from "@/client.js";
 
 const client = await connect("http://localhost:9222");
 const page = await client.page("main");
 
-// First, get the tree to see what's on the page
-const tree = await client.getLLMTree("main");
-console.log(tree);
-// Output shows: [11]<a href="...">Article Title Here</a>
+await page.goto("https://news.ycombinator.com");
+await waitForPageLoad(page);
 
-// Get the selector for element 11
-const selector = await client.getSelectorForID("main", 11);
-console.log(selector); // e.g., "a:nth-of-type(3)" or "#article-link"
+// Get the snapshot to see available refs
+const snapshot = await client.getAISnapshot("main");
+console.log(snapshot);
+// Output shows: - link "new" [ref=e2]
 
-// Now use that selector with Playwright
-await page.click(selector);
+// Get the element by ref and click it
+const element = await client.selectSnapshotRef("main", "e2");
+await element.click();
+
+await waitForPageLoad(page);
+console.log("Navigated to:", page.url());
 
 await client.disconnect();
 EOF
 ```
 
-### When to Use Each Approach
-
-| Method          | Best For                                                                        |
-| --------------- | ------------------------------------------------------------------------------- |
-| **Screenshots** | Visual debugging, seeing layout/styling issues, sharing with humans             |
-| **LLM Tree**    | Understanding page structure, finding interactive elements, text-based analysis |
-| **Selectors**   | Programmatically interacting with elements found in the tree                    |
-
 ## Debugging Tips
 
-1. **Use getLLMTree** for a structured view of interactive elements
+1. **Use getAISnapshot** to see what elements are available and their refs
 2. **Take screenshots** when you need visual context
-3. **Log selectors** before clicking to verify they exist
-4. **Use waitForSelector** before interacting with dynamic content
-5. **Check page.url()** to confirm navigation worked
+3. **Use waitForSelector** before interacting with dynamic content
+4. **Check page.url()** to confirm navigation worked
 
 ## Error Recovery
 

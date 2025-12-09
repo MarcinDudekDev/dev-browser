@@ -11,7 +11,7 @@ Browser automation that maintains page state across script executions. Write sma
 
 **Local/source-available sites**: If you have access to the source code (e.g., localhost or project files), read the code first to write selectors directly—no need for multi-script discovery.
 
-**External sites**: Use `getAISnapshot()` to discover elements and `selectSnapshotRef()` to interact with them. The ARIA snapshot provides semantic roles (button, link, heading) and stable refs that persist across script executions.
+**Unknown page layouts**: If you don't know the structure of the page, use `getAISnapshot()` to discover elements and `selectSnapshotRef()` to interact with them. The ARIA snapshot provides semantic roles (button, link, heading) and stable refs that persist across script executions.
 
 **Visual feedback**: Take screenshots to see what the user sees and iterate on design or debug layout issues.
 
@@ -168,9 +168,9 @@ await page.screenshot({ path: "tmp/screenshot.png" });
 await page.screenshot({ path: "tmp/full.png", fullPage: true });
 ```
 
-### ARIA Snapshot (Recommended for AI Automation)
+### ARIA Snapshot (Element Discovery)
 
-**This is the recommended approach for AI-driven browser automation.** `getAISnapshot()` returns a YAML-formatted accessibility tree that mirrors Playwright's internal `_snapshotForAI()` method. It provides:
+Use `getAISnapshot()` when you don't know the page layout and need to discover what elements are available. It returns a YAML-formatted accessibility tree with:
 
 - **Semantic roles** (button, link, textbox, heading, etc.)
 - **Accessible names** (what screen readers would announce)

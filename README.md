@@ -163,17 +163,18 @@ Once installed, just ask Claude to interact with your browser. Here are some exa
 
 _Averaged over 3 runs per method. See [dev-browser-eval](https://github.com/SawyerHood/dev-browser-eval) for methodology._
 
-| Method           | Time   | Cost (USD) | Turns | Success Rate |
-| ---------------- | ------ | ---------- | ----- | ------------ |
-| **Dev Browser**  | 3m 53s | $0.88      | 29    | 100% (3/3)   |
-| Playwright MCP   | 4m 31s | $1.45      | 51    | 100% (3/3)   |
-| Playwright Skill | 8m 07s | $1.45      | 38    | 67% (2/3)    |
+| Method                  | Time    | Cost (USD) | Turns | Success Rate |
+| ----------------------- | ------- | ---------- | ----- | ------------ |
+| **Dev Browser**         | 3m 53s  | $0.88      | 29    | 100% (3/3)   |
+| Playwright MCP          | 4m 31s  | $1.45      | 51    | 100% (3/3)   |
+| Playwright Skill        | 8m 07s  | $1.45      | 38    | 67% (2/3)    |
+| Claude Chrome Extension | 12m 54s | $2.81      | 80    | 100% (3/3)   |
 
 **Dev Browser advantages:**
 
-- **14% faster** than Playwright MCP, **52% faster** than Playwright Skill
-- **39% cheaper** than both alternatives
-- **43% fewer turns** than Playwright MCP, **24% fewer** than Playwright Skill
+- **14% faster** than Playwright MCP, **52% faster** than Playwright Skill, **70% faster** than Claude Chrome Extension
+- **39% cheaper** than Playwright MCP/Skill, **69% cheaper** than Claude Chrome Extension
+- **43% fewer turns** than Playwright MCP, **24% fewer** than Playwright Skill, **64% fewer** than Claude Chrome Extension
 
 ## License
 

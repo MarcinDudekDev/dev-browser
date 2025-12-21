@@ -5,7 +5,61 @@ description: Browser automation with persistent page state. Use when users ask t
 
 # Dev Browser Skill
 
-Browser automation that maintains page state across script executions. Write small, focused scripts to accomplish tasks incrementally. Once you've proven out part of a workflow and there is repeated work to be done, you can write a script to do the repeated work in a single execution.
+Browser automation that maintains page state across script executions. Write small, focused scripts to accomplish tasks incrementally.
+
+## Quick Start: Use the Wrapper
+
+**ALWAYS use `wrapper.sh` (or symlinked `~/Tools/dev-browser.sh`) instead of raw npx commands.**
+
+The wrapper provides:
+- Auto-prefixes page names with project name (prevents collisions)
+- Auto-imports `connect` and `waitForPageLoad`
+- Auto-starts server if needed
+- Auto-resizes screenshots for Claude (max 7500px)
+- Console error capture
+- Convenience commands for common tasks
+
+### Installation (one-time)
+
+```bash
+# Create symlink to wrapper
+ln -sf /path/to/skills/dev-browser/wrapper.sh ~/Tools/dev-browser.sh
+```
+
+### Basic Usage
+
+```bash
+# Run inline script
+~/Tools/dev-browser.sh <<'EOF'
+const client = await connect();
+const page = await client.page("mypage");
+await page.goto("https://example.com");
+await waitForPageLoad(page);
+console.log(await page.title());
+await client.disconnect();
+EOF
+
+# Convenience commands
+~/Tools/dev-browser.sh --status              # Check server & list pages
+~/Tools/dev-browser.sh --screenshot mypage   # Screenshot + auto-resize
+~/Tools/dev-browser.sh --page-status mypage  # Detect error/success messages
+~/Tools/dev-browser.sh --inspect mypage      # Show forms, iframes, elements
+~/Tools/dev-browser.sh --console mypage      # Watch console output live
+~/Tools/dev-browser.sh --server              # Start server only
+~/Tools/dev-browser.sh --stop                # Stop server
+```
+
+### Why Use the Wrapper?
+
+| Without Wrapper | With Wrapper |
+|-----------------|--------------|
+| `cd /long/path/to/skills/dev-browser && npx tsx <<'EOF'` | `~/Tools/dev-browser.sh <<'EOF'` |
+| Manual imports required | Auto-imports `connect`, `waitForPageLoad` |
+| Page name collisions across projects | Auto-prefixed with project name |
+| Screenshots may exceed Claude's limit | Auto-resized to 7500px max |
+| Manual server management | Auto-starts if needed |
+
+---
 
 ## Choosing Your Approach
 

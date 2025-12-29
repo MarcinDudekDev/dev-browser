@@ -45,6 +45,9 @@ EOF
 ~/Tools/dev-browser.sh --page-status mypage  # Detect error/success messages
 ~/Tools/dev-browser.sh --inspect mypage      # Show forms, iframes, elements
 ~/Tools/dev-browser.sh --console mypage      # Watch console output live
+~/Tools/dev-browser.sh --resize 375          # Resize viewport (mobile)
+~/Tools/dev-browser.sh --resize 1280 800     # Resize with custom height
+~/Tools/dev-browser.sh --responsive mypage   # Screenshots at all breakpoints
 ~/Tools/dev-browser.sh --server              # Start server only
 ~/Tools/dev-browser.sh --stop                # Stop server
 ```

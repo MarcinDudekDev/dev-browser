@@ -1,24 +1,38 @@
 #!/bin/bash
 # Dev-browser wrapper - runs scripts with project-prefixed page names
 # Usage:
-#   wrapper.sh [script.ts]              # Run a script file
-#   wrapper.sh <<'EOF' ... EOF          # Run inline script
-#   wrapper.sh --server                 # Start server only
-#   wrapper.sh --status                 # Check server status
-#   wrapper.sh --stop                   # Stop server
-#   wrapper.sh --inspect [page]         # Inspect page: forms, iframes, errors
-#   wrapper.sh --page-status [page]     # Detect error/success messages in DOM
-#   wrapper.sh --screenshot [page] [path] # Take screenshot (auto-resizes for Claude)
-#   wrapper.sh --console [page]         # Watch console output (Ctrl+C to stop)
+#   dev-browser.sh [script.ts]              # Run a script file
+#   dev-browser.sh <<'EOF' ... EOF          # Run inline script (or pipe)
+#   dev-browser.sh --run <name> [args]      # Run named script from scripts dir
+#   dev-browser.sh --list                   # List available scripts
+#   dev-browser.sh --server                 # Start server only
+#   dev-browser.sh --status                 # Check server status
+#   dev-browser.sh --stop                   # Stop server
+#   dev-browser.sh --inspect [page]         # Inspect page: forms, iframes, errors
+#   dev-browser.sh --page-status [page]     # Detect error/success messages in DOM
+#   dev-browser.sh --screenshot [page] [path] # Take screenshot (auto-resizes)
+#   dev-browser.sh --console [page] [timeout]  # Watch console (timeout in seconds, 0=forever)
+#   dev-browser.sh --snap [page]              # Save baseline screenshot for visual diff
+#   dev-browser.sh --diff [page]              # Compare current state to baseline
+#   dev-browser.sh --baselines                # List saved visual baselines
+#   dev-browser.sh --resize <width> [h] [page] # Resize viewport (375/768/1024/1280)
+#   dev-browser.sh --responsive [page] [dir]  # Screenshots at all breakpoints
+#   dev-browser.sh --wplogin [url]            # Auto-login to WordPress (admin/admin123)
+#                                             # Auto-detects domain from wp-test cwd
 #
 # Page names are auto-prefixed with project name from cwd.
-# Multiple sessions can share the server safely.
+# WP-TEST CREDENTIALS: admin / admin123 (lowercase)
+# Scripts dir: ~/Tools/dev-browser-scripts/
 #
 # Installation:
 #   ln -sf "$(pwd)/wrapper.sh" ~/Tools/dev-browser.sh
 
-# Get the directory where this script lives (the skill directory)
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Get the directory where this script lives (following symlinks)
+SOURCE="${BASH_SOURCE[0]}"
+if [ -L "$SOURCE" ]; then
+    SOURCE="$(readlink "$SOURCE")"
+fi
+SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
 DEV_BROWSER_DIR="$SCRIPT_DIR"
 
 # Screenshot settings (Claude's 8000px limit, leave margin)
@@ -27,6 +41,8 @@ SERVER_PID_FILE="/tmp/dev-browser-server.pid"
 SERVER_LOG="/tmp/dev-browser-server.log"
 SERVER_PORT=9222
 SCREENSHOTS_DIR="${SCREENSHOTS_DIR:-$HOME/Tools/screenshots}"
+SCRIPTS_DIR="$HOME/Tools/dev-browser-scripts"
+VISUAL_DIFF="$HOME/Tools/visual-diff"
 
 get_project_prefix() {
     local cwd="$PWD"
@@ -146,7 +162,7 @@ run_page_status() {
     start_server || exit 1
     local PREFIX=$(get_project_prefix)
 
-    cd "$DEV_BROWSER_DIR" && npx tsx <<STATUS_SCRIPT
+    cd "$DEV_BROWSER_DIR" && ./node_modules/.bin/tsx <<STATUS_SCRIPT
 import { connect } from "@/client.js";
 
 const client = await connect();
@@ -237,7 +253,7 @@ run_inspect() {
     start_server || exit 1
     local PREFIX=$(get_project_prefix)
 
-    cd "$DEV_BROWSER_DIR" && npx tsx <<INSPECT_SCRIPT
+    cd "$DEV_BROWSER_DIR" && ./node_modules/.bin/tsx <<INSPECT_SCRIPT
 import { connect } from "@/client.js";
 
 const client = await connect();
@@ -336,16 +352,33 @@ INSPECT_SCRIPT
 # Watch console output from a page
 run_console() {
     local page_name="${1:-main}"
+    local timeout_sec="${2:-0}"
     start_server || exit 1
     local PREFIX=$(get_project_prefix)
 
-    echo "Watching console for page '${page_name}' (Ctrl+C to stop)..."
+    if [[ "$timeout_sec" -gt 0 ]]; then
+        echo "Watching console for page '${page_name}' (timeout: ${timeout_sec}s)..."
+    else
+        echo "Watching console for page '${page_name}' (Ctrl+C to stop)..."
+    fi
 
-    cd "$DEV_BROWSER_DIR" && npx tsx <<CONSOLE_SCRIPT
+    cd "$DEV_BROWSER_DIR" && ./node_modules/.bin/tsx <<CONSOLE_SCRIPT
 import { connect } from "@/client.js";
 
 const client = await connect();
-const page = await client.page("${PREFIX}-${page_name}");
+const pageName = "${PREFIX}-${page_name}";
+const timeoutSec = ${timeout_sec};
+
+// Check if page exists first
+const pages = await client.list();
+if (!pages.includes(pageName)) {
+    console.log("Page '${page_name}' not found. Available pages:");
+    pages.forEach(p => console.log("  - " + p.replace("${PREFIX}-", "")));
+    await client.disconnect();
+    process.exit(1);
+}
+
+const page = await client.page(pageName);
 
 page.on('console', msg => {
     const type = msg.type().toUpperCase().padEnd(7);
@@ -363,8 +396,18 @@ console.log("Listening for console messages...");
 console.log("URL:", page.url());
 console.log("---");
 
-// Keep alive
-await new Promise(() => {});
+if (timeoutSec > 0) {
+    // Exit after timeout
+    setTimeout(async () => {
+        console.log("---");
+        console.log(\`Timeout (\${timeoutSec}s) reached.\`);
+        await client.disconnect();
+        process.exit(0);
+    }, timeoutSec * 1000);
+} else {
+    // Keep alive forever
+    await new Promise(() => {});
+}
 CONSOLE_SCRIPT
 }
 
@@ -387,7 +430,8 @@ case "$1" in
         exit $?
         ;;
     --console)
-        run_console "$2"
+        # --console [page] [timeout_seconds]
+        run_console "$2" "$3"
         exit $?
         ;;
     --page-status)
@@ -400,10 +444,23 @@ case "$1" in
         start_server || exit 1
         PREFIX=$(get_project_prefix)
         mkdir -p "$(dirname "$screenshot_path")"
-        cd "$DEV_BROWSER_DIR" && npx tsx <<SCREENSHOT_SCRIPT
+        cd "$DEV_BROWSER_DIR" && ./node_modules/.bin/tsx <<SCREENSHOT_SCRIPT
 import { connect } from "@/client.js";
 const client = await connect();
-const page = await client.page("${PREFIX}-${page_name}");
+const pageName = "${PREFIX}-${page_name}";
+
+// Check if page exists first - don't create new empty tabs
+const pages = await client.list();
+if (!pages.includes(pageName)) {
+    console.error("Page '${page_name}' not found (full name: " + pageName + ")");
+    console.error("Available pages:");
+    pages.forEach(p => console.error("  - " + p));
+    await client.disconnect();
+    process.exit(1);
+}
+
+// Page exists, safe to get it (won't create new)
+const page = await client.page(pageName);
 await page.screenshot({ path: "${screenshot_path}", fullPage: true });
 console.log("Screenshot saved:", "${screenshot_path}");
 await client.disconnect();
@@ -411,8 +468,203 @@ SCREENSHOT_SCRIPT
         resize_screenshot "$screenshot_path"
         exit $?
         ;;
+    --snap)
+        # Save baseline screenshot for visual diff
+        page_name="${2:-main}"
+        "$VISUAL_DIFF" --snap "$page_name"
+        exit $?
+        ;;
+    --diff)
+        # Compare current state to baseline
+        page_name="${2:-main}"
+        "$VISUAL_DIFF" --compare "$page_name"
+        exit $?
+        ;;
+    --baselines)
+        # List saved baselines
+        "$VISUAL_DIFF" --list
+        exit $?
+        ;;
+    --resize)
+        # Resize viewport: --resize <width> [height] [page]
+        width="${2:-}"
+        if [[ -z "$width" ]]; then
+            echo "Usage: dev-browser.sh --resize <width> [height] [page]" >&2
+            echo "  Common widths: 375 (mobile), 768 (tablet), 1024 (laptop), 1280 (desktop)" >&2
+            exit 1
+        fi
+        height="${3:-900}"
+        page_name="${4:-main}"
+        # Check if height is actually a page name (no third arg)
+        if [[ ! "$height" =~ ^[0-9]+$ ]]; then
+            page_name="$height"
+            height=900
+        fi
+        start_server || exit 1
+        PREFIX=$(get_project_prefix)
+        cd "$DEV_BROWSER_DIR" && ./node_modules/.bin/tsx <<RESIZE_SCRIPT
+import { connect } from "@/client.js";
+const client = await connect();
+const pageName = "${PREFIX}-${page_name}";
+const pages = await client.list();
+if (!pages.includes(pageName)) {
+    console.error("Page '${page_name}' not found");
+    console.error("Available pages:", pages.join(", "));
+    await client.disconnect();
+    process.exit(1);
+}
+const page = await client.page(pageName);
+await page.setViewportSize({ width: ${width}, height: ${height} });
+console.log("Viewport resized to ${width}x${height}");
+await client.disconnect();
+RESIZE_SCRIPT
+        exit $?
+        ;;
+    --responsive)
+        # Take screenshots at common breakpoints: --responsive [page] [output_dir]
+        page_name="${2:-main}"
+        output_dir="${3:-$SCREENSHOTS_DIR}"
+        start_server || exit 1
+        PREFIX=$(get_project_prefix)
+        mkdir -p "$output_dir"
+        timestamp=$(date +%Y%m%d-%H%M%S)
+        cd "$DEV_BROWSER_DIR" && ./node_modules/.bin/tsx <<RESPONSIVE_SCRIPT
+import { connect } from "@/client.js";
+
+const breakpoints = [
+    { name: 'mobile', width: 375, height: 812 },
+    { name: 'tablet', width: 768, height: 1024 },
+    { name: 'laptop', width: 1024, height: 768 },
+    { name: 'desktop', width: 1280, height: 800 },
+];
+
+const client = await connect();
+const pageName = "${PREFIX}-${page_name}";
+const pages = await client.list();
+if (!pages.includes(pageName)) {
+    console.error("Page '${page_name}' not found");
+    console.error("Available pages:", pages.join(", "));
+    await client.disconnect();
+    process.exit(1);
+}
+
+const page = await client.page(pageName);
+const url = page.url();
+console.log("Taking responsive screenshots of:", url);
+
+for (const bp of breakpoints) {
+    await page.setViewportSize({ width: bp.width, height: bp.height });
+    await page.waitForTimeout(300); // Let CSS settle
+
+    // Check for horizontal overflow
+    const hasOverflow = await page.evaluate(() =>
+        document.documentElement.scrollWidth > document.documentElement.clientWidth
+    );
+
+    const status = hasOverflow ? '❌ OVERFLOW' : '✅ OK';
+    const path = "${output_dir}/${timestamp}-${page_name}-" + bp.name + ".png";
+    await page.screenshot({ path, fullPage: true });
+    console.log(\`\${bp.name.padEnd(8)} (\${bp.width}px): \${status} → \${path}\`);
+}
+
+// Reset to desktop
+await page.setViewportSize({ width: 1280, height: 800 });
+console.log("\\nViewport reset to desktop (1280x800)");
+await client.disconnect();
+RESPONSIVE_SCRIPT
+        exit $?
+        ;;
     --help|-h)
-        head -19 "$0" | tail -17
+        head -25 "$0" | tail -23
+        exit 0
+        ;;
+    --wplogin)
+        # WordPress login: navigate, fill credentials, submit
+        # Auto-detect domain from cwd if in a wp-test site directory
+        target_url="${2:-}"
+        if [[ -z "$target_url" ]]; then
+            # Try to extract domain from cwd path like ~/.wp-test/sites/<domain>/
+            if [[ "$PWD" == *"/.wp-test/sites/"* ]]; then
+                wp_domain=$(echo "$PWD" | sed -n 's|.*/.wp-test/sites/\([^/]*\)/.*|\1|p')
+                if [[ -n "$wp_domain" ]]; then
+                    target_url="https://${wp_domain}/wp-admin/"
+                    echo "Auto-detected wp-test domain: ${wp_domain}" >&2
+                fi
+            fi
+        fi
+        # Final fallback - should not happen with proper detection
+        if [[ -z "$target_url" ]]; then
+            echo "ERROR: Could not detect WordPress URL. Please provide URL as argument:" >&2
+            echo "  dev-browser.sh --wplogin https://mysite.local/wp-admin/" >&2
+            exit 1
+        fi
+        start_server || exit 1
+        PREFIX=$(get_project_prefix)
+        cd "$DEV_BROWSER_DIR" && ./node_modules/.bin/tsx <<WPLOGIN_SCRIPT
+import { connect, waitForPageLoad } from "@/client.js";
+
+const targetUrl = "${target_url}";
+const username = "admin";
+const password = "admin123";
+
+const client = await connect();
+const page = await client.page("${PREFIX}-main");
+
+// Navigate to target URL
+console.log("Navigating to:", targetUrl);
+await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+await waitForPageLoad(page);
+
+// Check if we're on login page
+const currentUrl = page.url();
+if (currentUrl.includes('wp-login.php')) {
+    console.log("Login page detected, logging in...");
+
+    // Fill login form
+    await page.fill('input[name="log"]', username);
+    await page.fill('input[name="pwd"]', password);
+
+    // Click login button and wait for navigation
+    await Promise.all([
+        page.waitForNavigation({ timeout: 30000 }),
+        page.click('input[name="wp-submit"]')
+    ]);
+
+    console.log("Logged in successfully!");
+} else {
+    console.log("Already logged in or not a login page");
+}
+
+console.log("Current URL:", page.url());
+console.log("Title:", await page.title());
+await client.disconnect();
+WPLOGIN_SCRIPT
+        exit $?
+        ;;
+    --run)
+        # Run a named script from scripts directory
+        script_name="$2"
+        shift 2
+        script_file="$SCRIPTS_DIR/${script_name}.ts"
+        if [[ ! -f "$script_file" ]]; then
+            echo "Script not found: $script_file" >&2
+            echo "Available scripts:" >&2
+            ls -1 "$SCRIPTS_DIR"/*.ts 2>/dev/null | xargs -I{} basename {} .ts | sed 's/^/  /'
+            exit 1
+        fi
+        # Pass remaining args as env vars
+        export SCRIPT_ARGS="$*"
+        exec "$0" "$script_file"
+        ;;
+    --list)
+        # List available scripts
+        echo "Available scripts in $SCRIPTS_DIR:"
+        ls -1 "$SCRIPTS_DIR"/*.ts 2>/dev/null | while read f; do
+            name=$(basename "$f" .ts)
+            desc=$(head -1 "$f" | sed -n 's|^// *||p')
+            [[ -z "$desc" ]] && desc="(no description)"
+            printf "  %-20s %s\n" "$name" "$desc"
+        done
         exit 0
         ;;
 esac
@@ -478,4 +730,4 @@ const { waitForPageLoad } = await import("@/client.js");
 ${SCRIPT}
 ENDOFSCRIPT
 
-cd "$DEV_BROWSER_DIR" && exec npx tsx "$TEMP_SCRIPT"
+cd "$DEV_BROWSER_DIR" && exec ./node_modules/.bin/tsx "$TEMP_SCRIPT"

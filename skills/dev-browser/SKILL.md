@@ -28,35 +28,45 @@ ln -sf /path/to/skills/dev-browser/wrapper.sh ~/Tools/dev-browser.sh
 
 ### Basic Usage
 
+**Step 1: Use built-in commands when possible**
+
 ```bash
-# Run inline script
-~/Tools/dev-browser.sh <<'EOF'
+~/Tools/dev-browser.sh --run goto https://example.com   # Navigate to URL
+~/Tools/dev-browser.sh --run click "Submit"             # Click by text
+~/Tools/dev-browser.sh --run fill "email" "a@b.com"     # Fill input field
+~/Tools/dev-browser.sh --screenshot main                # Take screenshot
+~/Tools/dev-browser.sh --status                         # List active pages
+~/Tools/dev-browser.sh --inspect main                   # Show forms, elements
+~/Tools/dev-browser.sh --resize 375                     # Mobile viewport
+~/Tools/dev-browser.sh --responsive main                # All breakpoint screenshots
+```
+
+**Step 2: For custom logic, write script file then run**
+
+```bash
+# 1. Write script to ~/Tools/dev-browser-scripts/mytest.ts
+# 2. Run it:
+~/Tools/dev-browser.sh --run mytest
+```
+
+Example script (`~/Tools/dev-browser-scripts/mytest.ts`):
+```typescript
+// connect() and waitForPageLoad() are auto-imported by wrapper
 const client = await connect();
-const page = await client.page("mypage");
+const page = await client.page("main");
 await page.goto("https://example.com");
 await waitForPageLoad(page);
 console.log(await page.title());
 await client.disconnect();
-EOF
-
-# Convenience commands
-~/Tools/dev-browser.sh --status              # Check server & list pages
-~/Tools/dev-browser.sh --screenshot mypage   # Screenshot + auto-resize
-~/Tools/dev-browser.sh --page-status mypage  # Detect error/success messages
-~/Tools/dev-browser.sh --inspect mypage      # Show forms, iframes, elements
-~/Tools/dev-browser.sh --console mypage      # Watch console output live
-~/Tools/dev-browser.sh --resize 375          # Resize viewport (mobile)
-~/Tools/dev-browser.sh --resize 1280 800     # Resize with custom height
-~/Tools/dev-browser.sh --responsive mypage   # Screenshots at all breakpoints
-~/Tools/dev-browser.sh --server              # Start server only
-~/Tools/dev-browser.sh --stop                # Stop server
 ```
+
+**⚠️ DO NOT use heredocs (`<<'EOF'`)** - use script files instead for better debugging and reusability.
 
 ### Why Use the Wrapper?
 
 | Without Wrapper | With Wrapper |
 |-----------------|--------------|
-| `cd /long/path/to/skills/dev-browser && npx tsx <<'EOF'` | `~/Tools/dev-browser.sh <<'EOF'` |
+| `cd /long/path && npx tsx script.ts` | `~/Tools/dev-browser.sh --run script` |
 | Manual imports required | Auto-imports `connect`, `waitForPageLoad` |
 | Page name collisions across projects | Auto-prefixed with project name |
 | Screenshots may exceed Claude's limit | Auto-resized to 7500px max |
@@ -110,57 +120,56 @@ The server starts a Chromium browser with a REST API for page management (defaul
 
 ## Writing Scripts
 
-Execute scripts inline using heredocs—no need to write files for one-off automation.
-
-> **CRITICAL: Always run scripts from `skills/dev-browser/`**
->
-> Scripts must be executed from the `skills/dev-browser/` directory. The `@/` import alias (e.g., `@/client.js`) is configured in this directory's `tsconfig.json` and `package.json`. Running from any other directory will fail with:
->
-> ```
-> ERR_MODULE_NOT_FOUND: Cannot find package '@/client.js'
-> ```
+**ALWAYS write scripts to `~/Tools/dev-browser-scripts/` then run with `--run`**
 
 ```bash
-cd skills/dev-browser && npx tsx <<'EOF'
-import { connect } from "@/client.js";
-const client = await connect();
-const page = await client.page("homepage");
-// Your automation code here
-await client.disconnect();
-EOF
+# 1. Write your script
+~/Tools/dev-browser-scripts/myscript.ts
+
+# 2. Run it
+~/Tools/dev-browser.sh --run myscript
 ```
 
-**Only write to `tmp/` files when:**
+The wrapper auto-imports `connect` and `waitForPageLoad`, so your scripts are simpler:
 
-- The script needs to be reused multiple times
-- The script is complex and you need to iterate on it
-- The user explicitly asks for a saved script
-
-### Basic Template
-
-Use the `@/client.js` import path for all scripts.
-
-```bash
-cd skills/dev-browser && npx tsx <<'EOF'
-import { connect, waitForPageLoad } from "@/client.js";
-
+```typescript
+// ~/Tools/dev-browser-scripts/myscript.ts
 const client = await connect();
-const page = await client.page("homepage"); // get or create a named page
-await page.setViewportSize({ width: 1280, height: 800 }); // Required for screenshots
-
-// Your automation code here
+const page = await client.page("main");
 await page.goto("https://example.com");
-await waitForPageLoad(page); // Wait for page to fully load
+await waitForPageLoad(page);
+console.log(await page.title());
+await client.disconnect();
+```
 
-// Always evaluate state at the end
+> **Why script files instead of heredocs?**
+> - Easier to debug (you can see exactly what ran)
+> - Reusable across sessions
+> - Proper syntax highlighting in editors
+> - No escaping issues with quotes/variables
+
+### Script Template
+
+Save to `~/Tools/dev-browser-scripts/yourscript.ts`:
+
+```typescript
+// connect and waitForPageLoad are auto-imported by wrapper
+const client = await connect();
+const page = await client.page("main");
+await page.setViewportSize({ width: 1280, height: 800 });
+
+await page.goto("https://example.com");
+await waitForPageLoad(page);
+
+// Log state at the end
 const title = await page.title();
 const url = page.url();
 console.log({ title, url });
 
-// Disconnect so the script exits (page stays alive on the server)
 await client.disconnect();
-EOF
 ```
+
+Run with: `~/Tools/dev-browser.sh --run yourscript`
 
 ### Key Principles
 
@@ -260,23 +269,18 @@ Use `getAISnapshot()` when you don't know the page layout and need to discover w
 - **Element states** (checked, disabled, expanded, etc.)
 - **Stable refs** that persist across script executions
 
-```bash
-cd skills/dev-browser && npx tsx <<'EOF'
-import { connect, waitForPageLoad } from "@/client.js";
-
+Script (`~/Tools/dev-browser-scripts/get-snapshot.ts`):
+```typescript
 const client = await connect();
-const page = await client.page("hackernews");
-
+const page = await client.page("main");
 await page.goto("https://news.ycombinator.com");
 await waitForPageLoad(page);
-
-// Get the ARIA accessibility snapshot
-const snapshot = await client.getAISnapshot("hackernews");
+const snapshot = await client.getAISnapshot("main");
 console.log(snapshot);
-
 await client.disconnect();
-EOF
 ```
+
+Run: `~/Tools/dev-browser.sh --run get-snapshot`
 
 #### Example Output
 
@@ -319,31 +323,27 @@ The snapshot is YAML-formatted with semantic structure:
 
 Use `selectSnapshotRef()` to get a Playwright ElementHandle for any ref:
 
-```bash
-cd skills/dev-browser && npx tsx <<'EOF'
-import { connect, waitForPageLoad } from "@/client.js";
-
+Script (`~/Tools/dev-browser-scripts/click-ref.ts`):
+```typescript
 const client = await connect();
-const page = await client.page("hackernews");
-
+const page = await client.page("main");
 await page.goto("https://news.ycombinator.com");
 await waitForPageLoad(page);
 
-// Get the snapshot to see available refs
-const snapshot = await client.getAISnapshot("hackernews");
+// Get snapshot to see refs
+const snapshot = await client.getAISnapshot("main");
 console.log(snapshot);
 // Output shows: - link "new" [ref=e2]
 
-// Get the element by ref and click it
-const element = await client.selectSnapshotRef("hackernews", "e2");
+// Click element by ref
+const element = await client.selectSnapshotRef("main", "e2");
 await element.click();
-
 await waitForPageLoad(page);
 console.log("Navigated to:", page.url());
-
 await client.disconnect();
-EOF
 ```
+
+Run: `~/Tools/dev-browser.sh --run click-ref`
 
 ## Working with Iframes (Stripe, PayPal, etc.)
 
@@ -353,45 +353,36 @@ Payment forms and embedded widgets often use iframes that are invisible to norma
 
 `findInFrames()` searches all frames (main + nested) for an element:
 
-```bash
-cd skills/dev-browser && bun x tsx <<'EOF'
-import { connect, waitForPageLoad } from "@/client.js";
-
+Script (`~/Tools/dev-browser-scripts/find-in-iframe.ts`):
+```typescript
 const client = await connect();
-const page = await client.page("checkout");
-
+const page = await client.page("main");
 await page.goto("https://example.com/checkout");
 await waitForPageLoad(page);
 
 // Find card input in Stripe iframe
-const result = await client.findInFrames("checkout", 'input[name="cardnumber"]');
+const result = await client.findInFrames("main", 'input[name="cardnumber"]');
 if (result.element) {
-  console.log("Found in:", result.frameInfo); // e.g., "(unnamed) [Stripe]: https://js.stripe.com/..."
+  console.log("Found in:", result.frameInfo);
   await result.element.fill("4242424242424242");
 } else {
   console.log("Not found:", result.frameInfo);
 }
-
 await client.disconnect();
-EOF
 ```
 
 ### Smart Form Filling
 
 `fillForm()` finds fields by label, name, placeholder, or aria-label—across all frames:
 
-```bash
-cd skills/dev-browser && bun x tsx <<'EOF'
-import { connect, waitForPageLoad } from "@/client.js";
-
+Script (`~/Tools/dev-browser-scripts/fill-checkout.ts`):
+```typescript
 const client = await connect();
-const page = await client.page("checkout");
-
+const page = await client.page("main");
 await page.goto("https://example.com/checkout");
 await waitForPageLoad(page);
 
-// Fill form using field labels - works across frames
-const result = await client.fillForm("checkout", {
+const result = await client.fillForm("main", {
   "Card Number": "4242424242424242",
   "Expiration Date": "12/25",
   "CVC": "123",
@@ -401,9 +392,7 @@ const result = await client.fillForm("checkout", {
 console.log("Filled:", result.filled);
 console.log("Not found:", result.notFound);
 console.log("Submitted:", result.submitted);
-
 await client.disconnect();
-EOF
 ```
 
 ### Options
@@ -429,24 +418,19 @@ EOF
 
 If a script fails, the page state is preserved. You can:
 
-1. Take a screenshot to see what happened
-2. Check the current URL and DOM state
-3. Write a recovery script to get back on track
+1. Take a screenshot: `~/Tools/dev-browser.sh --screenshot main`
+2. Check status: `~/Tools/dev-browser.sh --page-status main`
+3. Inspect elements: `~/Tools/dev-browser.sh --inspect main`
 
-```bash
-cd skills/dev-browser && npx tsx <<'EOF'
-import { connect } from "@/client.js";
-
+Or write a debug script (`~/Tools/dev-browser-scripts/debug.ts`):
+```typescript
 const client = await connect();
-const page = await client.page("hackernews");
-
-await page.screenshot({ path: "tmp/debug.png" });
+const page = await client.page("main");
+await page.screenshot({ path: "/tmp/debug.png" });
 console.log({
   url: page.url(),
   title: await page.title(),
   bodyText: await page.textContent("body").then((t) => t?.slice(0, 200)),
 });
-
 await client.disconnect();
-EOF
 ```

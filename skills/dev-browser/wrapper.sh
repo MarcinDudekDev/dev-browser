@@ -340,8 +340,9 @@ const buttons = lines.filter(l => l.includes('button')).slice(0, 5);
 const links = lines.filter(l => l.includes('link "')).slice(0, 5);
 const textboxes = lines.filter(l => l.includes('textbox')).slice(0, 5);
 
-console.log("=== KEY ELEMENTS (from ARIA snapshot) ===");
+console.log("=== KEY ELEMENTS (use [ref=eN] with selectSnapshotRef) ===");
 if (buttons.length) { console.log("Buttons:"); buttons.forEach(b => console.log("  " + b.trim())); }
+if (links.length) { console.log("Links:"); links.forEach(l => console.log("  " + l.trim())); }
 if (textboxes.length) { console.log("Textboxes:"); textboxes.forEach(t => console.log("  " + t.trim())); }
 console.log("");
 

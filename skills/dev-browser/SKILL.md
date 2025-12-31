@@ -1,6 +1,11 @@
 ---
 name: dev-browser
-description: Browser automation with persistent page state. Use when users ask to navigate websites, fill forms, take screenshots, extract web data, test web apps, or automate browser workflows. Trigger phrases include "go to [url]", "click on", "fill out the form", "take a screenshot", "scrape", "automate", "test the website", "log into", or any browser interaction request.
+description: Browser automation with persistent page state for navigating sites, filling forms, taking screenshots, and web testing.
+domain: browser
+type: plugin
+frequency: daily
+commands: [--run, --snap, --screenshot, --inspect]
+tools: [~/Tools/dev-browser.sh]
 ---
 
 # Dev Browser Skill
@@ -44,12 +49,19 @@ ln -sf /path/to/skills/dev-browser/wrapper.sh ~/Tools/dev-browser.sh
 **Step 2: For custom logic, write script file then run**
 
 ```bash
-# 1. Write script to ~/Tools/dev-browser-scripts/mytest.ts
+# 1. Write script to ~/Tools/dev-browser-scripts/{project}/mytest.ts
 # 2. Run it:
-~/Tools/dev-browser.sh --run mytest
+~/Tools/dev-browser.sh --run {project}/mytest
 ```
 
-Example script (`~/Tools/dev-browser-scripts/mytest.ts`):
+**IMPORTANT: Always use project subdirectories** to keep scripts organized:
+- `~/Tools/dev-browser-scripts/matchify/login.ts`
+- `~/Tools/dev-browser-scripts/brandkit/generate.ts`
+- `~/Tools/dev-browser-scripts/mm/checkout.ts`
+
+Use the current project name (from cwd or context) as the subdirectory.
+
+Example script (`~/Tools/dev-browser-scripts/myproject/mytest.ts`):
 ```typescript
 // connect() and waitForPageLoad() are auto-imported by wrapper
 const client = await connect();
@@ -74,13 +86,46 @@ await client.disconnect();
 
 ---
 
-## Choosing Your Approach
+## CRITICAL: Recon Before Action
 
-**Local/source-available sites**: If you have access to the source code (e.g., localhost or project files), read the code first to write selectors directly—no need for multi-script discovery.
+**NEVER guess selectors. NEVER start with screenshots for discovery.**
 
-**Unknown page layouts**: If you don't know the structure of the page, use `getAISnapshot()` to discover elements and `selectSnapshotRef()` to interact with them. The ARIA snapshot provides semantic roles (button, link, heading) and stable refs that persist across script executions.
+Before ANY interaction with a page, follow this workflow:
 
-**Visual feedback**: Take screenshots to see what the user sees and iterate on design or debug layout issues.
+### Step 0: Check Source Code (if available)
+If you have access to the source (localhost, project files), **read the code first** to write selectors directly. Skip browser inspection entirely.
+
+### Step 1: --inspect (default first step)
+```bash
+~/Tools/dev-browser.sh --inspect main
+```
+Returns: URL, forms, inputs, buttons, links with `[ref=eN]` refs.
+**Sufficient for 80% of tasks**: login forms, button clicks, navigation.
+
+### Step 2: --snapshot (if --inspect insufficient)
+```bash
+# In script:
+const snapshot = await client.getAISnapshot("main");
+```
+Returns: Full ARIA accessibility tree with all interactive elements.
+**Use when**: Complex/dynamic pages, need elements not in forms.
+
+### Step 3: --screenshot (visual confirmation ONLY)
+```bash
+~/Tools/dev-browser.sh --screenshot main
+```
+**NOT for finding selectors** - screenshots don't show CSS selectors or refs.
+**Use for**: Verifying results, debugging layout, visual confirmation.
+
+### Why This Order?
+| Step | Token Cost | Output | Use Case |
+|------|-----------|--------|----------|
+| Source code | 0 (already loaded) | Exact selectors | Local/project sites |
+| --inspect | Low (text) | Forms, buttons, links + refs | Most interactions |
+| --snapshot | Medium (text) | Full ARIA tree | Complex pages |
+| --screenshot | High (image) | Visual only | Verification |
+
+**If you guess and fail, you wasted more tokens than inspecting first.**
 
 ## Setup
 
@@ -120,20 +165,23 @@ The server starts a Chromium browser with a REST API for page management (defaul
 
 ## Writing Scripts
 
-**ALWAYS write scripts to `~/Tools/dev-browser-scripts/` then run with `--run`**
+**ALWAYS write scripts to `~/Tools/dev-browser-scripts/{project}/` then run with `--run`**
 
 ```bash
-# 1. Write your script
-~/Tools/dev-browser-scripts/myscript.ts
+# 1. Create project subdirectory if needed
+mkdir -p ~/Tools/dev-browser-scripts/myproject
 
-# 2. Run it
-~/Tools/dev-browser.sh --run myscript
+# 2. Write your script
+~/Tools/dev-browser-scripts/myproject/myscript.ts
+
+# 3. Run it
+~/Tools/dev-browser.sh --run myproject/myscript
 ```
 
 The wrapper auto-imports `connect` and `waitForPageLoad`, so your scripts are simpler:
 
 ```typescript
-// ~/Tools/dev-browser-scripts/myscript.ts
+// ~/Tools/dev-browser-scripts/myproject/myscript.ts
 const client = await connect();
 const page = await client.page("main");
 await page.goto("https://example.com");
@@ -150,7 +198,7 @@ await client.disconnect();
 
 ### Script Template
 
-Save to `~/Tools/dev-browser-scripts/yourscript.ts`:
+Save to `~/Tools/dev-browser-scripts/{project}/yourscript.ts`:
 
 ```typescript
 // connect and waitForPageLoad are auto-imported by wrapper
@@ -169,7 +217,7 @@ console.log({ title, url });
 await client.disconnect();
 ```
 
-Run with: `~/Tools/dev-browser.sh --run yourscript`
+Run with: `~/Tools/dev-browser.sh --run {project}/yourscript`
 
 ### Key Principles
 
@@ -269,7 +317,7 @@ Use `getAISnapshot()` when you don't know the page layout and need to discover w
 - **Element states** (checked, disabled, expanded, etc.)
 - **Stable refs** that persist across script executions
 
-Script (`~/Tools/dev-browser-scripts/get-snapshot.ts`):
+Script (`~/Tools/dev-browser-scripts/{project}/get-snapshot.ts`):
 ```typescript
 const client = await connect();
 const page = await client.page("main");
@@ -280,7 +328,7 @@ console.log(snapshot);
 await client.disconnect();
 ```
 
-Run: `~/Tools/dev-browser.sh --run get-snapshot`
+Run: `~/Tools/dev-browser.sh --run {project}/get-snapshot`
 
 #### Example Output
 
@@ -323,7 +371,7 @@ The snapshot is YAML-formatted with semantic structure:
 
 Use `selectSnapshotRef()` to get a Playwright ElementHandle for any ref:
 
-Script (`~/Tools/dev-browser-scripts/click-ref.ts`):
+Script (`~/Tools/dev-browser-scripts/{project}/click-ref.ts`):
 ```typescript
 const client = await connect();
 const page = await client.page("main");
@@ -343,7 +391,7 @@ console.log("Navigated to:", page.url());
 await client.disconnect();
 ```
 
-Run: `~/Tools/dev-browser.sh --run click-ref`
+Run: `~/Tools/dev-browser.sh --run {project}/click-ref`
 
 ## Working with Iframes (Stripe, PayPal, etc.)
 
@@ -353,7 +401,7 @@ Payment forms and embedded widgets often use iframes that are invisible to norma
 
 `findInFrames()` searches all frames (main + nested) for an element:
 
-Script (`~/Tools/dev-browser-scripts/find-in-iframe.ts`):
+Script (`~/Tools/dev-browser-scripts/{project}/find-in-iframe.ts`):
 ```typescript
 const client = await connect();
 const page = await client.page("main");
@@ -375,7 +423,7 @@ await client.disconnect();
 
 `fillForm()` finds fields by label, name, placeholder, or aria-label—across all frames:
 
-Script (`~/Tools/dev-browser-scripts/fill-checkout.ts`):
+Script (`~/Tools/dev-browser-scripts/{project}/fill-checkout.ts`):
 ```typescript
 const client = await connect();
 const page = await client.page("main");
@@ -422,7 +470,7 @@ If a script fails, the page state is preserved. You can:
 2. Check status: `~/Tools/dev-browser.sh --page-status main`
 3. Inspect elements: `~/Tools/dev-browser.sh --inspect main`
 
-Or write a debug script (`~/Tools/dev-browser-scripts/debug.ts`):
+Or write a debug script (`~/Tools/dev-browser-scripts/{project}/debug.ts`):
 ```typescript
 const client = await connect();
 const page = await client.page("main");

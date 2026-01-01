@@ -12,24 +12,28 @@ tools: [~/Tools/dev-browser.sh]
 
 Browser automation that maintains page state across script executions. Write small, focused scripts to accomplish tasks incrementally.
 
-## Quick Start: Use the Wrapper
+## Quick Start
 
-**ALWAYS use `wrapper.sh` (or symlinked `~/Tools/dev-browser.sh`) instead of raw npx commands.**
+**ALWAYS use `~/Tools/dev-browser.sh` instead of raw npx commands.**
 
-The wrapper provides:
+Features:
 - Auto-prefixes page names with project name (prevents collisions)
-- Auto-imports `connect` and `waitForPageLoad`
+- Auto-imports `connect`, `waitForPageLoad`, and wait helpers
 - Auto-starts server if needed
 - Auto-resizes screenshots for Claude (max 7500px)
 - Console error capture
-- Convenience commands for common tasks
+- Built-in scripts for common tasks
 
-### Installation (one-time)
+### Installation
 
 ```bash
-# Create symlink to wrapper
-ln -sf /path/to/skills/dev-browser/wrapper.sh ~/Tools/dev-browser.sh
+cd skills/dev-browser && ./install.sh
 ```
+
+This creates:
+- `~/Tools/dev-browser.sh` - CLI entry point
+- `~/.claude/skills/dev-browser/SKILL.md` - Claude Code integration
+- `~/Tools/dev-browser-scripts/` - directory for personal scripts
 
 ### Basic Usage
 
@@ -49,15 +53,24 @@ ln -sf /path/to/skills/dev-browser/wrapper.sh ~/Tools/dev-browser.sh
 **Step 2: For custom logic, write script file then run**
 
 ```bash
-# 1. Write script to ~/Tools/dev-browser-scripts/{project}/mytest.ts
-# 2. Run it:
-~/Tools/dev-browser.sh --run {project}/mytest
+# Built-in scripts (bundled with skill):
+~/Tools/dev-browser.sh --run goto https://example.com
+~/Tools/dev-browser.sh --run click "Submit"
+~/Tools/dev-browser.sh --run fill "email=test@example.com"
+
+# Personal scripts (in ~/Tools/dev-browser-scripts/):
+~/Tools/dev-browser.sh --run myproject/login
+~/Tools/dev-browser.sh --run myproject/checkout-flow
 ```
 
-**IMPORTANT: Always use project subdirectories** to keep scripts organized:
-- `~/Tools/dev-browser-scripts/matchify/login.ts`
-- `~/Tools/dev-browser-scripts/brandkit/generate.ts`
-- `~/Tools/dev-browser-scripts/mm/checkout.ts`
+**Script resolution order:**
+1. Built-in: `skills/dev-browser/scripts/{name}.ts`
+2. Personal: `~/Tools/dev-browser-scripts/{name}.ts`
+3. Personal with path: `~/Tools/dev-browser-scripts/{project}/{name}.ts`
+
+**Personal scripts should use project subdirectories:**
+- `~/Tools/dev-browser-scripts/myproject/login.ts`
+- `~/Tools/dev-browser-scripts/myproject/checkout.ts`
 
 Use the current project name (from cwd or context) as the subdirectory.
 

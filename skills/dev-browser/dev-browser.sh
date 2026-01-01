@@ -41,7 +41,10 @@ SERVER_PID_FILE="/tmp/dev-browser-server.pid"
 SERVER_LOG="/tmp/dev-browser-server.log"
 SERVER_PORT=9222
 SCREENSHOTS_DIR="${SCREENSHOTS_DIR:-$HOME/Tools/screenshots}"
-SCRIPTS_DIR="$HOME/Tools/dev-browser-scripts"
+# Built-in scripts (bundled with skill)
+BUILTIN_SCRIPTS_DIR="$DEV_BROWSER_DIR/scripts"
+# User scripts (personal/project-specific)
+USER_SCRIPTS_DIR="$HOME/Tools/dev-browser-scripts"
 VISUAL_DIFF="$HOME/Tools/visual-diff"
 
 get_project_prefix() {
@@ -644,13 +647,31 @@ WPLOGIN_SCRIPT
         ;;
     --run)
         # Run a named script from scripts directory
+        # Resolution order: builtin → user root → user subdirs
         script_name="$2"
         shift 2
-        script_file="$SCRIPTS_DIR/${script_name}.ts"
-        if [[ ! -f "$script_file" ]]; then
-            echo "Script not found: $script_file" >&2
-            echo "Available scripts:" >&2
-            ls -1 "$SCRIPTS_DIR"/*.ts 2>/dev/null | xargs -I{} basename {} .ts | sed 's/^/  /'
+        script_file=""
+        # 1. Check builtin scripts (skill/scripts/)
+        if [[ -f "$BUILTIN_SCRIPTS_DIR/${script_name}.ts" ]]; then
+            script_file="$BUILTIN_SCRIPTS_DIR/${script_name}.ts"
+        # 2. Check user scripts root
+        elif [[ -f "$USER_SCRIPTS_DIR/${script_name}.ts" ]]; then
+            script_file="$USER_SCRIPTS_DIR/${script_name}.ts"
+        # 3. Check user scripts with path (project/script)
+        elif [[ -f "$USER_SCRIPTS_DIR/${script_name}.ts" ]]; then
+            script_file="$USER_SCRIPTS_DIR/${script_name}.ts"
+        fi
+        if [[ -z "$script_file" ]]; then
+            echo "Script not found: $script_name" >&2
+            echo "Searched:" >&2
+            echo "  $BUILTIN_SCRIPTS_DIR/${script_name}.ts" >&2
+            echo "  $USER_SCRIPTS_DIR/${script_name}.ts" >&2
+            echo "" >&2
+            echo "Built-in scripts:" >&2
+            ls -1 "$BUILTIN_SCRIPTS_DIR"/*.ts 2>/dev/null | xargs -I{} basename {} .ts | sed 's/^/  /'
+            echo "" >&2
+            echo "User scripts (use --list for full list):" >&2
+            find "$USER_SCRIPTS_DIR" -maxdepth 2 -name "*.ts" 2>/dev/null | head -10 | sed "s|$USER_SCRIPTS_DIR/||" | sed 's/^/  /'
             exit 1
         fi
         # Pass remaining args as env vars
@@ -659,12 +680,21 @@ WPLOGIN_SCRIPT
         ;;
     --list)
         # List available scripts
-        echo "Available scripts in $SCRIPTS_DIR:"
-        ls -1 "$SCRIPTS_DIR"/*.ts 2>/dev/null | while read f; do
+        echo "=== Built-in scripts ($BUILTIN_SCRIPTS_DIR) ==="
+        ls -1 "$BUILTIN_SCRIPTS_DIR"/*.ts 2>/dev/null | while read f; do
+            [[ "$(basename "$f")" == "start-server.ts" ]] && continue
             name=$(basename "$f" .ts)
             desc=$(head -1 "$f" | sed -n 's|^// *||p')
             [[ -z "$desc" ]] && desc="(no description)"
             printf "  %-20s %s\n" "$name" "$desc"
+        done
+        echo ""
+        echo "=== User scripts ($USER_SCRIPTS_DIR) ==="
+        find "$USER_SCRIPTS_DIR" -maxdepth 2 -name "*.ts" 2>/dev/null | sort | while read f; do
+            name=$(echo "$f" | sed "s|$USER_SCRIPTS_DIR/||" | sed 's/\.ts$//')
+            desc=$(head -1 "$f" | sed -n 's|^// *||p')
+            [[ -z "$desc" ]] && desc=""
+            printf "  %-30s %s\n" "$name" "$desc"
         done
         exit 0
         ;;

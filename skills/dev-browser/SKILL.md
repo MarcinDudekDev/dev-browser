@@ -30,10 +30,14 @@ Features:
 cd skills/dev-browser && ./install.sh
 ```
 
-This creates:
-- `~/Tools/dev-browser.sh` - CLI entry point
-- `~/.claude/skills/dev-browser/SKILL.md` - Claude Code integration
-- `~/Tools/dev-browser-scripts/` - directory for personal scripts
+This:
+- Links SKILL.md for Claude Code integration
+- Installs npm dependencies
+
+For CLI usage, either use the full path or create an alias:
+```bash
+alias dev-browser='/path/to/skills/dev-browser/dev-browser.sh'
+```
 
 ### Basic Usage
 

@@ -68,6 +68,26 @@ export interface WaitForPageLoadOptions {
 }
 
 /**
+ * Options for waiting for an element
+ */
+export interface WaitForElementOptions {
+  /** Maximum time to wait in ms (default: 10000) */
+  timeout?: number;
+  /** Element state to wait for (default: 'visible') */
+  state?: 'attached' | 'detached' | 'visible' | 'hidden';
+}
+
+/**
+ * Options for waiting for a condition
+ */
+export interface WaitForConditionOptions {
+  /** Maximum time to wait in ms (default: 10000) */
+  timeout?: number;
+  /** How often to check the condition in ms (default: 100) */
+  pollInterval?: number;
+}
+
+/**
  * Result of waiting for page load
  */
 export interface WaitForPageLoadResult {
@@ -250,6 +270,116 @@ async function getPageLoadState(page: Page): Promise<PageLoadState> {
   });
 
   return result;
+}
+
+/**
+ * Wait for an element to appear on the page.
+ * Use instead of setTimeout after clicks/navigation.
+ *
+ * @example
+ * await click('#submit');
+ * await waitForElement(page, '.success-message');
+ */
+export async function waitForElement(
+  page: Page,
+  selector: string,
+  options: WaitForElementOptions = {}
+): Promise<boolean> {
+  const { timeout = 10000, state = 'visible' } = options;
+  try {
+    await page.locator(selector).waitFor({ state, timeout });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Wait for an element to disappear (e.g., loading spinner, modal).
+ *
+ * @example
+ * await click('#submit');
+ * await waitForElementGone(page, '.loading-spinner');
+ */
+export async function waitForElementGone(
+  page: Page,
+  selector: string,
+  options: { timeout?: number } = {}
+): Promise<boolean> {
+  const { timeout = 10000 } = options;
+  try {
+    await page.locator(selector).waitFor({ state: 'hidden', timeout });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Wait for a JS condition to become true.
+ * The condition function runs in the browser context.
+ *
+ * @example
+ * // Wait for app state
+ * await waitForCondition(page, () => window.appLoaded === true);
+ *
+ * // Wait for animation to finish
+ * await waitForCondition(page, () => !document.querySelector('.animating'));
+ */
+export async function waitForCondition(
+  page: Page,
+  condition: () => boolean | Promise<boolean>,
+  options: WaitForConditionOptions = {}
+): Promise<boolean> {
+  const { timeout = 10000, pollInterval = 100 } = options;
+  try {
+    await page.waitForFunction(condition, { timeout, polling: pollInterval });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Wait for URL to match a pattern.
+ *
+ * @example
+ * await click('#login');
+ * await waitForURL(page, '**\/dashboard');
+ */
+export async function waitForURL(
+  page: Page,
+  urlPattern: string | RegExp,
+  options: { timeout?: number } = {}
+): Promise<boolean> {
+  const { timeout = 10000 } = options;
+  try {
+    await page.waitForURL(urlPattern, { timeout });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Wait for network to settle (no requests for given duration).
+ * Useful after AJAX actions.
+ *
+ * @example
+ * await click('#save');
+ * await waitForNetworkIdle(page); // Wait for AJAX to complete
+ */
+export async function waitForNetworkIdle(
+  page: Page,
+  options: { timeout?: number } = {}
+): Promise<boolean> {
+  const { timeout = 10000 } = options;
+  try {
+    await page.waitForLoadState('networkidle', { timeout });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export interface DevBrowserClient {

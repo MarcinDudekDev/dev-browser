@@ -725,7 +725,7 @@ const connect = async (url?: string) => {
     };
     return client;
 };
-const { waitForPageLoad } = await import("@/client.js");
+const { waitForPageLoad, waitForElement, waitForElementGone, waitForCondition, waitForURL, waitForNetworkIdle } = await import("@/client.js");
 
 // User script starts here
 ${SCRIPT}

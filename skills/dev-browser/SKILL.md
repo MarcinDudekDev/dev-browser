@@ -282,19 +282,74 @@ The `page` object is a standard Playwright Page—use normal Playwright methods.
 
 ## Waiting
 
-Use `waitForPageLoad(page)` after navigation (checks document.readyState and network idle):
+### ❌ Anti-Pattern: setTimeout/sleep
+
+**NEVER use `setTimeout` or sleep for waiting.** It's flaky, slow, and unpredictable:
 
 ```typescript
-import { waitForPageLoad } from "@/client.js";
+// ❌ BAD - Don't do this
+await button.click();
+await new Promise(r => setTimeout(r, 2000)); // Wastes 2s even if ready in 100ms
+await page.screenshot({ path: '/tmp/result.png' });
 
-// Preferred: Wait for page to fully load
+// ❌ BAD - Also don't do this
+await page.goto(url, { waitUntil: 'networkidle' });
+await new Promise(r => setTimeout(r, 2000)); // Redundant! Already waited for networkidle
+```
+
+### ✅ Event-Based Waiting (Use These Instead)
+
+The wrapper auto-imports these helpers. Use them for reliable, fast waits:
+
+```typescript
+// After navigation - wait for page to fully load
 await waitForPageLoad(page);
 
-// Wait for specific elements
-await page.waitForSelector(".results");
+// After click - wait for result element to appear
+await button.click();
+await waitForElement(page, '.success-message');
 
-// Wait for specific URL
-await page.waitForURL("**/success");
+// After action - wait for loading spinner to disappear
+await submitBtn.click();
+await waitForElementGone(page, '.loading-spinner');
+
+// After form submit - wait for URL change
+await form.submit();
+await waitForURL(page, '**/thank-you');
+
+// After AJAX action - wait for network to settle
+await saveBtn.click();
+await waitForNetworkIdle(page);
+
+// Wait for JS condition (animation, app state, etc.)
+await waitForCondition(page, () => window.appReady === true);
+await waitForCondition(page, () => !document.querySelector('.animating'));
+```
+
+### Available Wait Functions
+
+| Function | Use When |
+|----------|----------|
+| `waitForPageLoad(page)` | After `goto()` - waits for document + network |
+| `waitForElement(page, selector)` | Waiting for element to appear (modal, result) |
+| `waitForElementGone(page, selector)` | Waiting for element to disappear (spinner, overlay) |
+| `waitForURL(page, pattern)` | After navigation/form submit |
+| `waitForNetworkIdle(page)` | After AJAX actions |
+| `waitForCondition(page, fn)` | Custom JS condition (animations, app state) |
+
+### When setTimeout is Acceptable
+
+Only use `setTimeout` for:
+1. **Intentional delays** (rate limiting, debounce testing)
+2. **Animation observation** (watching visual effects, not waiting for them)
+3. **Debugging** (temporary, remove before commit)
+
+```typescript
+// ✅ OK - Intentional delay for rate limiting
+await new Promise(r => setTimeout(r, 100)); // Rate limit API calls
+
+// ✅ OK - Temporary debugging
+await new Promise(r => setTimeout(r, 5000)); // TODO: remove - just watching animation
 ```
 
 ## Inspecting Page State

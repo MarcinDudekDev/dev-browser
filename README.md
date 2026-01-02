@@ -10,11 +10,68 @@ A browser automation plugin for [Claude Code](https://docs.anthropic.com/en/docs
 
 This fork adds:
 
-- **Event-based wait helpers** - Replace fragile `setTimeout` with proper event waits (`waitForNavigation`, `waitForSelector`, `waitForNetworkIdle`)
-- **Built-in scripts** - Ready-to-use `goto.ts`, `click.ts`, `fill.ts`, `wait.ts` in the skills directory
-- **Wrapper conveniences** - One-liner commands: `--screenshot`, `--inspect`, `--resize`
-- **Auto-imports** - Common Playwright utilities pre-imported
-- **Project-prefixed pages** - Organize scripts by project subdirectories
+- **Event-based wait helpers** - Replace fragile `setTimeout` with proper event waits
+- **Built-in scripts** - Ready-to-use scripts for common tasks
+- **Wrapper conveniences** - One-liner CLI commands
+- **Auto-imports** - `connect`, `waitForPageLoad`, and wait helpers pre-imported
+- **Project-prefixed pages** - Prevents page name collisions across projects
+
+### CLI Commands
+
+```bash
+# Navigation & interaction
+dev-browser.sh --run goto https://example.com    # Navigate to URL
+dev-browser.sh --run click "Submit"              # Click by text
+dev-browser.sh --run fill "email=test@test.com"  # Fill input field
+
+# Screenshots & inspection
+dev-browser.sh --screenshot [page] [path]        # Take screenshot (auto-resizes for Claude)
+dev-browser.sh --inspect [page]                  # Show forms, inputs, buttons with refs
+dev-browser.sh --page-status [page]              # Detect error/success messages
+
+# Viewport & responsive
+dev-browser.sh --resize 375 [page]               # Mobile viewport
+dev-browser.sh --responsive [page]               # Screenshots at all breakpoints
+
+# Visual diff
+dev-browser.sh --snap [page]                     # Save baseline screenshot
+dev-browser.sh --diff [page]                     # Compare current to baseline
+dev-browser.sh --baselines                       # List saved baselines
+
+# Server management
+dev-browser.sh --status                          # List active pages
+dev-browser.sh --server                          # Start server only
+dev-browser.sh --stop                            # Stop server
+
+# Debugging
+dev-browser.sh --console [page] [timeout]        # Watch console output
+dev-browser.sh --wplogin [url]                   # WordPress auto-login (admin/admin123)
+dev-browser.sh --list                            # List all available scripts
+```
+
+### Built-in Scripts
+
+| Script | Usage | Description |
+|--------|-------|-------------|
+| `goto` | `--run goto <url>` | Navigate to URL |
+| `click` | `--run click "<text>"` | Click element by text/selector |
+| `fill` | `--run fill "name=value"` | Fill form field |
+| `screenshot` | `--run screenshot` | Take screenshot |
+| `snap` | `--run snap` | Get ARIA accessibility snapshot |
+| `fullpage` | `--run fullpage` | Full page screenshot |
+| `eval` | `--run eval "<js>"` | Evaluate JS in page context |
+| `hard-refresh` | `--run hard-refresh` | Hard refresh (clear cache) |
+
+### Wait Functions (auto-imported)
+
+```typescript
+await waitForPageLoad(page);              // After goto() - waits for document + network
+await waitForElement(page, '.modal');     // Wait for element to appear
+await waitForElementGone(page, '.spinner'); // Wait for element to disappear
+await waitForURL(page, '**/thank-you');   // Wait for URL change
+await waitForNetworkIdle(page);           // Wait for AJAX to settle
+await waitForCondition(page, () => window.appReady === true); // Custom condition
+```
 
 **Key features:**
 
@@ -29,11 +86,17 @@ This fork adds:
 
 ## Installation
 
-### Claude Code
+### Claude Code (from this fork)
 
-```
-/plugin marketplace add sawyerhood/dev-browser
-/plugin install dev-browser@sawyerhood/dev-browser
+Clone the skill to your skills directory:
+
+```bash
+SKILLS_DIR=~/.claude/skills
+mkdir -p $SKILLS_DIR
+git clone https://github.com/MarcinDudekDev/dev-browser /tmp/dev-browser-skill
+cp -r /tmp/dev-browser-skill/skills/dev-browser $SKILLS_DIR/dev-browser
+rm -rf /tmp/dev-browser-skill
+cd $SKILLS_DIR/dev-browser && npm install
 ```
 
 Restart Claude Code after installation.

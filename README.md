@@ -2,7 +2,19 @@
   <img src="assets/header.png" alt="Dev Browser - Browser automation for Claude Code" width="100%">
 </p>
 
+> **Fork of [SawyerHood/dev-browser](https://github.com/SawyerHood/dev-browser)** with additional conveniences for daily automation workflows.
+
 A browser automation plugin for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) that lets Claude control your browser to test and verify your work as you develop.
+
+## Fork Features
+
+This fork adds:
+
+- **Event-based wait helpers** - Replace fragile `setTimeout` with proper event waits (`waitForNavigation`, `waitForSelector`, `waitForNetworkIdle`)
+- **Built-in scripts** - Ready-to-use `goto.ts`, `click.ts`, `fill.ts`, `wait.ts` in the skills directory
+- **Wrapper conveniences** - One-liner commands: `--screenshot`, `--inspect`, `--resize`
+- **Auto-imports** - Common Playwright utilities pre-imported
+- **Project-prefixed pages** - Organize scripts by project subdirectories
 
 **Key features:**
 
@@ -35,7 +47,7 @@ Copy the skill to your skills directory:
 SKILLS_DIR=~/.claude/skills  # or ~/.codex/skills
 
 mkdir -p $SKILLS_DIR
-git clone https://github.com/sawyerhood/dev-browser /tmp/dev-browser-skill
+git clone https://github.com/MarcinDudekDev/dev-browser /tmp/dev-browser-skill
 cp -r /tmp/dev-browser-skill/skills/dev-browser $SKILLS_DIR/dev-browser
 rm -rf /tmp/dev-browser-skill
 ```
@@ -91,6 +103,8 @@ _See [dev-browser-eval](https://github.com/SawyerHood/dev-browser-eval) for meth
 
 MIT
 
-## Author
+## Authors
 
-[Sawyer Hood](https://github.com/sawyerhood)
+**Original:** [Sawyer Hood](https://github.com/sawyerhood)
+
+**Fork:** [Marcin Dudek](https://github.com/MarcinDudekDev)

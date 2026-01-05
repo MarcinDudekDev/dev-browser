@@ -35,10 +35,14 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
 DEV_BROWSER_DIR="$SCRIPT_DIR"
 
+# Skill-local tmp directory (avoids /tmp permission prompts)
+SKILL_TMP_DIR="$DEV_BROWSER_DIR/tmp"
+mkdir -p "$SKILL_TMP_DIR"
+
 # Screenshot settings (Claude's 8000px limit, leave margin)
 MAX_SCREENSHOT_DIM=7500
-SERVER_PID_FILE="/tmp/dev-browser-server.pid"
-SERVER_LOG="/tmp/dev-browser-server.log"
+SERVER_PID_FILE="$SKILL_TMP_DIR/server.pid"
+SERVER_LOG="$SKILL_TMP_DIR/server.log"
 SERVER_PORT=9222
 SCREENSHOTS_DIR="${SCREENSHOTS_DIR:-$HOME/Tools/screenshots}"
 # Built-in scripts (bundled with skill)
@@ -79,6 +83,14 @@ else:
 
     # Fallback to directory name
     basename "$cwd" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | cut -c1-20 | tr -d '\n'
+}
+
+# Get per-project paths for screenshots and temp scripts
+get_project_paths() {
+    local prefix=$(get_project_prefix)
+    PROJECT_SCREENSHOTS_DIR="$SCREENSHOTS_DIR/$prefix"
+    PROJECT_TMP_DIR="$SKILL_TMP_DIR/$prefix"
+    mkdir -p "$PROJECT_TMP_DIR" "$PROJECT_SCREENSHOTS_DIR"
 }
 
 start_server() {
@@ -444,7 +456,8 @@ case "$1" in
         ;;
     --screenshot)
         page_name="${2:-main}"
-        screenshot_path="${3:-$SCREENSHOTS_DIR/screenshot-$(date +%s).png}"
+        get_project_paths  # sets PROJECT_SCREENSHOTS_DIR
+        screenshot_path="${3:-$PROJECT_SCREENSHOTS_DIR/screenshot-$(date +%s).png}"
         start_server || exit 1
         PREFIX=$(get_project_prefix)
         mkdir -p "$(dirname "$screenshot_path")"
@@ -527,7 +540,8 @@ RESIZE_SCRIPT
     --responsive)
         # Take screenshots at common breakpoints: --responsive [page] [output_dir]
         page_name="${2:-main}"
-        output_dir="${3:-$SCREENSHOTS_DIR}"
+        get_project_paths  # sets PROJECT_SCREENSHOTS_DIR
+        output_dir="${3:-$PROJECT_SCREENSHOTS_DIR}"
         start_server || exit 1
         PREFIX=$(get_project_prefix)
         mkdir -p "$output_dir"
@@ -714,7 +728,8 @@ else
 fi
 
 # Create temp script file with .mts extension for ESM support
-TEMP_SCRIPT=$(mktemp /tmp/dev-browser-XXXXXX)
+get_project_paths  # sets PROJECT_TMP_DIR
+TEMP_SCRIPT=$(mktemp "$PROJECT_TMP_DIR/script-XXXXXX")
 mv "$TEMP_SCRIPT" "${TEMP_SCRIPT}.mts"
 TEMP_SCRIPT="${TEMP_SCRIPT}.mts"
 trap "rm -f $TEMP_SCRIPT" EXIT

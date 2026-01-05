@@ -1,0 +1,15 @@
+name: test-variables
+description: Test variable interpolation and environment fallback
+page: var-test
+
+variables:
+  SITE_URL: ${SITE_URL:-https://example.com}
+  TIMEOUT: "2000"
+
+steps:
+  - goto: "{{SITE_URL}}"
+  - wait: load
+    assert:
+      - { titleContains: "Example" }
+
+  - screenshot: example-site.png

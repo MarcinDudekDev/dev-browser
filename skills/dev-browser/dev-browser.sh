@@ -5,6 +5,8 @@
 #   dev-browser.sh <<'EOF' ... EOF          # Run inline script (or pipe)
 #   dev-browser.sh --run <name> [args]      # Run named script from scripts dir
 #   dev-browser.sh --list                   # List available scripts
+#   dev-browser.sh --scenario <file.yaml>   # Run YAML scenario file
+#   dev-browser.sh --scenarios              # List available scenario files
 #   dev-browser.sh --server                 # Start server only
 #   dev-browser.sh --status                 # Check server status
 #   dev-browser.sh --stop                   # Stop server
@@ -593,8 +595,48 @@ RESPONSIVE_SCRIPT
         exit $?
         ;;
     --help|-h)
-        head -25 "$0" | tail -23
+        head -27 "$0" | tail -25
         exit 0
+        ;;
+    --scenarios)
+        # List available scenario files
+        echo "=== Available scenarios ($DEV_BROWSER_DIR/scenarios/examples/) ==="
+        if [[ -d "$DEV_BROWSER_DIR/scenarios/examples" ]]; then
+            find "$DEV_BROWSER_DIR/scenarios/examples" -name "*.yaml" -o -name "*.yml" 2>/dev/null | sort | while read f; do
+                name=$(basename "$f")
+                desc=$(grep "^description:" "$f" 2>/dev/null | head -1 | sed 's/^description: *//' | sed 's/^["\x27]//' | sed 's/["\x27]$//')
+                [[ -z "$desc" ]] && desc="(no description)"
+                printf "  %-30s %s\n" "$name" "$desc"
+            done
+        else
+            echo "  No scenarios directory found"
+        fi
+        exit 0
+        ;;
+    --scenario)
+        # Run YAML scenario file
+        scenario_file="${2:-}"
+        if [[ -z "$scenario_file" ]]; then
+            echo "Usage: dev-browser.sh --scenario <file.yaml>" >&2
+            echo "" >&2
+            echo "Available scenarios (use --scenarios to list):" >&2
+            find "$DEV_BROWSER_DIR/scenarios/examples" -name "*.yaml" -o -name "*.yml" 2>/dev/null | head -5 | xargs -I{} basename {} | sed 's/^/  /'
+            exit 1
+        fi
+        # Check if file exists as-is, or in examples dir
+        if [[ -f "$scenario_file" ]]; then
+            SCENARIO_PATH="$scenario_file"
+        elif [[ -f "$DEV_BROWSER_DIR/scenarios/examples/$scenario_file" ]]; then
+            SCENARIO_PATH="$DEV_BROWSER_DIR/scenarios/examples/$scenario_file"
+        else
+            echo "Scenario file not found: $scenario_file" >&2
+            echo "Searched:" >&2
+            echo "  $scenario_file" >&2
+            echo "  $DEV_BROWSER_DIR/scenarios/examples/$scenario_file" >&2
+            exit 1
+        fi
+        start_server || exit 1
+        cd "$DEV_BROWSER_DIR" && exec bun x tsx src/scenario-runner.ts "$SCENARIO_PATH"
         ;;
     --wplogin)
         # WordPress login: navigate, fill credentials, submit

@@ -1,0 +1,56 @@
+name: responsive-check
+description: Multi-viewport screenshot capture for responsive design testing
+page: responsive
+
+variables:
+  TARGET_URL: ${TARGET_URL:-https://example.com}
+  WAIT_TIMEOUT: "8000"
+
+steps:
+  # Navigate to target URL
+  - goto: "{{TARGET_URL}}"
+  - wait: load
+
+  # Handle common blocking elements
+  - if:
+      exists: ".cookie-banner"
+    then:
+      - click: "#accept-cookies"
+      - wait: { gone: ".cookie-banner", timeout: 3000 }
+      onError: continue
+
+  # Handle newsletter popups
+  - if:
+      exists: ".modal-newsletter"
+    then:
+      - click: ".modal-close"
+      - wait: { gone: ".modal-newsletter", timeout: 2000 }
+      onError: continue
+
+  # Dismiss any alerts
+  - eval: |
+      const alerts = document.querySelectorAll('[role="alert"]');
+      alerts.forEach(el => el.style.display = 'none');
+    onError: continue
+
+  # Capture responsive viewports
+  - responsive:
+      path: "responsive-test"
+      viewports:
+        - { name: mobile-sm, width: 320, height: 568 }
+        - { name: mobile-md, width: 375, height: 667 }
+        - { name: mobile-lg, width: 414, height: 896 }
+        - { name: tablet, width: 768, height: 1024 }
+        - { name: laptop, width: 1366, height: 768 }
+        - { name: desktop, width: 1920, height: 1080 }
+
+  # Wait a moment for any transitions
+  - wait: { ms: 500 }
+
+  # Get viewport size metrics
+  - eval:
+      script: "return { width: window.innerWidth, height: window.innerHeight }"
+      store: currentViewport
+
+  # Summary screenshot of current state
+  - screenshot: responsive-summary.png

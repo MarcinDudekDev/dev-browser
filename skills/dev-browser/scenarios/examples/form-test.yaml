@@ -1,0 +1,58 @@
+name: form-test
+description: Generic form fill and submit with validation
+page: forms
+onError: stop
+
+variables:
+  FORM_URL: ${FORM_URL:-http://localhost:3000/form}
+  TEST_EMAIL: test@example.com
+  TEST_NAME: John Doe
+  SUBMIT_TIMEOUT: "5000"
+
+steps:
+  # Navigate to form
+  - goto: "{{FORM_URL}}"
+  - wait: load
+    assert:
+      - { visible: "form" }
+      - { titleContains: "Form" }
+
+  # Clear and fill form fields
+  - fill:
+      "#name": "{{TEST_NAME}}"
+      "#email": "{{TEST_EMAIL}}"
+      "#message": "This is a test submission from dev-browser automation."
+
+  # Select dropdown option
+  - click: "#category"
+  - wait: { ms: 300 }
+  - click: { text: "General Inquiry" }
+
+  # Handle checkbox if present
+  - if:
+      exists: "input[type='checkbox']"
+    then:
+      - click: "input[type='checkbox']"
+
+  # Handle optional phone field
+  - if:
+      exists: "#phone"
+    then:
+      - fill:
+          "#phone": "+1234567890"
+    else:
+      - eval: "console.log('Phone field not present')"
+
+  # Submit form
+  - click: "button[type='submit']"
+    assert:
+      - { visible: "button[type='submit']" }
+
+  # Wait for success state
+  - wait: { element: ".success-message", timeout: 5000 }
+    assert:
+      - { visible: ".success-message" }
+      - { text: { selector: ".success-message", contains: "success" } }
+
+  # Screenshot confirmation
+  - screenshot: form-submission-success.png

@@ -1,0 +1,22 @@
+name: test-error-handling
+description: Test error handling with continue mode
+page: error-test
+onError: continue
+
+steps:
+  - goto: "https://www.google.com"
+  - wait: load
+
+  # This should fail but continue
+  - click: { selector: "#non-existent-button", timeout: 1000 }
+    onError: continue
+
+  # This should still execute
+  - screenshot: after-error.png
+
+  # This will fail and stop (overrides global onError)
+  - click: { selector: "#another-missing-element", timeout: 1000 }
+    onError: stop
+
+  # This should not execute
+  - screenshot: should-not-exist.png

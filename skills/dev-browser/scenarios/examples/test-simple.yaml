@@ -1,0 +1,26 @@
+name: test-simple
+description: Simple test scenario for Google search
+page: test
+
+variables:
+  SEARCH_TERM: "playwright browser automation"
+
+steps:
+  # Navigate to Google
+  - goto: "https://www.google.com"
+  - wait: load
+
+  # Accept cookies if present
+  - if:
+      exists: "button:has-text('Accept all')"
+    then:
+      - click: "button:has-text('Accept all')"
+      - wait: { ms: 500 }
+
+  # Verify page loaded
+  - wait: load
+    assert:
+      - { visible: "textarea[name='q']" }
+
+  # Take screenshot
+  - screenshot: google-homepage.png

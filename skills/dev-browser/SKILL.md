@@ -12,17 +12,9 @@ tools: [~/Tools/dev-browser.sh]
 
 Browser automation that maintains page state across script executions. Write small, focused scripts to accomplish tasks incrementally.
 
-## Quick Start
+## Getting Started
 
-**ALWAYS use `~/Tools/dev-browser.sh` instead of raw npx commands.**
-
-Features:
-- Auto-prefixes page names with project name (prevents collisions)
-- Auto-imports `connect`, `waitForPageLoad`, and wait helpers
-- Auto-starts server if needed
-- Auto-resizes screenshots for Claude (max 7500px)
-- Console error capture
-- Built-in scripts for common tasks
+**ALWAYS use `~/Tools/dev-browser.sh` wrapper** - auto-imports helpers, prefixes page names, resizes screenshots, manages server.
 
 ### Installation
 
@@ -30,57 +22,26 @@ Features:
 cd skills/dev-browser && ./install.sh
 ```
 
-This:
-- Links SKILL.md for Claude Code integration
-- Installs npm dependencies
-
-For CLI usage, either use the full path or create an alias:
-```bash
-alias dev-browser='/path/to/skills/dev-browser/dev-browser.sh'
-```
-
-### Basic Usage
-
-**Step 1: Use built-in commands when possible**
+### Usage
 
 ```bash
-~/Tools/dev-browser.sh --run goto https://example.com   # Navigate to URL
-~/Tools/dev-browser.sh --run click "Submit"             # Click by text
-~/Tools/dev-browser.sh --run fill "email" "a@b.com"     # Fill input field
-~/Tools/dev-browser.sh --screenshot main                # Take screenshot
-~/Tools/dev-browser.sh --status                         # List active pages
-~/Tools/dev-browser.sh --inspect main                   # Show forms, elements
-~/Tools/dev-browser.sh --resize 375                     # Mobile viewport
-~/Tools/dev-browser.sh --responsive main                # All breakpoint screenshots
-```
-
-**Step 2: For custom logic, write script file then run**
-
-```bash
-# Built-in scripts (bundled with skill):
+# Built-in commands
 ~/Tools/dev-browser.sh --run goto https://example.com
 ~/Tools/dev-browser.sh --run click "Submit"
-~/Tools/dev-browser.sh --run fill "email=test@example.com"
+~/Tools/dev-browser.sh --screenshot main
+~/Tools/dev-browser.sh --inspect main  # Show forms/elements
 
-# Personal scripts (in ~/Tools/dev-browser-scripts/):
+# Custom scripts: ~/Tools/dev-browser-scripts/{project}/script.ts
 ~/Tools/dev-browser.sh --run myproject/login
-~/Tools/dev-browser.sh --run myproject/checkout-flow
+
+# YAML scenarios: Declarative flows
+~/Tools/dev-browser.sh --scenario wp-login
+~/Tools/dev-browser.sh --scenarios  # List available
 ```
 
-**Script resolution order:**
-1. Built-in: `skills/dev-browser/scripts/{name}.ts`
-2. Personal: `~/Tools/dev-browser-scripts/{name}.ts`
-3. Personal with path: `~/Tools/dev-browser-scripts/{project}/{name}.ts`
-
-**Personal scripts should use project subdirectories:**
-- `~/Tools/dev-browser-scripts/myproject/login.ts`
-- `~/Tools/dev-browser-scripts/myproject/checkout.ts`
-
-Use the current project name (from cwd or context) as the subdirectory.
-
-Example script (`~/Tools/dev-browser-scripts/myproject/mytest.ts`):
+Script template (`~/Tools/dev-browser-scripts/myproject/test.ts`):
 ```typescript
-// connect() and waitForPageLoad() are auto-imported by wrapper
+// connect, waitForPageLoad auto-imported
 const client = await connect();
 const page = await client.page("main");
 await page.goto("https://example.com");
@@ -89,60 +50,26 @@ console.log(await page.title());
 await client.disconnect();
 ```
 
-**⚠️ DO NOT use heredocs (`<<'EOF'`)** - use script files instead for better debugging and reusability.
-
-### Why Use the Wrapper?
-
-| Without Wrapper | With Wrapper |
-|-----------------|--------------|
-| `cd /long/path && npx tsx script.ts` | `~/Tools/dev-browser.sh --run script` |
-| Manual imports required | Auto-imports `connect`, `waitForPageLoad` |
-| Page name collisions across projects | Auto-prefixed with project name |
-| Screenshots may exceed Claude's limit | Auto-resized to 7500px max |
-| Manual server management | Auto-starts if needed |
+**⚠️ Use script files, NOT heredocs** - better debugging/reusability.
 
 ---
 
 ## CRITICAL: Recon Before Action
 
-**NEVER guess selectors. NEVER start with screenshots for discovery.**
+**NEVER guess selectors. NEVER start with screenshots.**
 
-Before ANY interaction with a page, follow this workflow:
+**Decision tree:**
+1. **Source code available?** → Read code, use exact selectors
+2. **Forms/buttons/links?** → `--inspect main` (sufficient 80% of time)
+3. **Complex/dynamic page?** → `getAISnapshot()` (full ARIA tree)
+4. **Visual verification?** → `--screenshot main` (NOT for selectors)
 
-### Step 0: Check Source Code (if available)
-If you have access to the source (localhost, project files), **read the code first** to write selectors directly. Skip browser inspection entirely.
-
-### Step 1: --inspect (default first step)
-```bash
-~/Tools/dev-browser.sh --inspect main
-```
-Returns: URL, forms, inputs, buttons, links with `[ref=eN]` refs.
-**Sufficient for 80% of tasks**: login forms, button clicks, navigation.
-
-### Step 2: --snapshot (if --inspect insufficient)
-```bash
-# In script:
-const snapshot = await client.getAISnapshot("main");
-```
-Returns: Full ARIA accessibility tree with all interactive elements.
-**Use when**: Complex/dynamic pages, need elements not in forms.
-
-### Step 3: --screenshot (visual confirmation ONLY)
-```bash
-~/Tools/dev-browser.sh --screenshot main
-```
-**NOT for finding selectors** - screenshots don't show CSS selectors or refs.
-**Use for**: Verifying results, debugging layout, visual confirmation.
-
-### Why This Order?
-| Step | Token Cost | Output | Use Case |
-|------|-----------|--------|----------|
-| Source code | 0 (already loaded) | Exact selectors | Local/project sites |
-| --inspect | Low (text) | Forms, buttons, links + refs | Most interactions |
-| --snapshot | Medium (text) | Full ARIA tree | Complex pages |
-| --screenshot | High (image) | Visual only | Verification |
-
-**If you guess and fail, you wasted more tokens than inspecting first.**
+| Method | Token Cost | Output | Use Case |
+|--------|-----------|--------|----------|
+| Source code | 0 | Exact selectors | Local/project sites |
+| --inspect | Low | Forms, buttons, links + refs | Most interactions |
+| --snapshot | Medium | Full ARIA tree | Complex pages |
+| --screenshot | High | Visual only | Verification |
 
 ## Setup
 
@@ -182,90 +109,32 @@ The server starts a Chromium browser with a REST API for page management (defaul
 
 ## Writing Scripts
 
-**ALWAYS write scripts to `~/Tools/dev-browser-scripts/{project}/` then run with `--run`**
+Save to `~/Tools/dev-browser-scripts/{project}/script.ts`, run with `--run {project}/script`.
 
-```bash
-# 1. Create project subdirectory if needed
-mkdir -p ~/Tools/dev-browser-scripts/myproject
-
-# 2. Write your script
-~/Tools/dev-browser-scripts/myproject/myscript.ts
-
-# 3. Run it
-~/Tools/dev-browser.sh --run myproject/myscript
-```
-
-The wrapper auto-imports `connect` and `waitForPageLoad`, so your scripts are simpler:
+**Principles:**
+- **Small scripts**: ONE action per script (navigate, click, fill, check)
+- **Log state**: Always output state at end to decide next step
+- **Descriptive page names**: `"checkout"` not `"main"`, `"login"` not `"page1"`
+- **Disconnect to exit**: `await client.disconnect()` at end
+- **Plain JS in evaluate()**: No TypeScript syntax in browser context
 
 ```typescript
-// ~/Tools/dev-browser-scripts/myproject/myscript.ts
+// Template
 const client = await connect();
-const page = await client.page("main");
+const page = await client.page("descriptive-name");
 await page.goto("https://example.com");
 await waitForPageLoad(page);
-console.log(await page.title());
+console.log({ title: await page.title(), url: page.url() });
 await client.disconnect();
 ```
 
-> **Why script files instead of heredocs?**
-> - Easier to debug (you can see exactly what ran)
-> - Reusable across sessions
-> - Proper syntax highlighting in editors
-> - No escaping issues with quotes/variables
-
-### Script Template
-
-Save to `~/Tools/dev-browser-scripts/{project}/yourscript.ts`:
-
-```typescript
-// connect and waitForPageLoad are auto-imported by wrapper
-const client = await connect();
-const page = await client.page("main");
-await page.setViewportSize({ width: 1280, height: 800 });
-
-await page.goto("https://example.com");
-await waitForPageLoad(page);
-
-// Log state at the end
-const title = await page.title();
-const url = page.url();
-console.log({ title, url });
-
-await client.disconnect();
-```
-
-Run with: `~/Tools/dev-browser.sh --run {project}/yourscript`
-
-### Key Principles
-
-1. **Small scripts**: Each script should do ONE thing (navigate, click, fill, check)
-2. **Evaluate state**: Always log/return state at the end to decide next steps
-3. **Use page names**: Use descriptive names like `"checkout"`, `"login"`, `"search-results"`
-4. **Disconnect to exit**: Call `await client.disconnect()` at the end of your script so the process exits cleanly. Pages persist on the server.
-5. **Plain JS in evaluate**: Always use plain JavaScript inside `page.evaluate()` callbacks—never TypeScript. The code runs in the browser which doesn't understand TS syntax.
-
-### Important Notes
-
-- **tsx runs without type-checking**: Scripts run with `npx tsx` which transpiles TypeScript but does NOT type-check. Type errors won't prevent execution—they're just ignored.
-- **No TypeScript in browser context**: Code passed to `page.evaluate()`, `page.evaluateHandle()`, or similar methods runs in the browser. Use plain JavaScript only:
-
-```typescript
-// ✅ Correct: plain JavaScript in evaluate
-const text = await page.evaluate(() => {
-  return document.body.innerText;
-});
-
-// ❌ Wrong: TypeScript syntax in evaluate (will fail at runtime)
-const text = await page.evaluate(() => {
-  const el: HTMLElement = document.body; // TS syntax - don't do this!
-  return el.innerText;
-});
-```
-
-- Names that you give to pages should be descriptive and unique
-
-❌ client.page("main")
-✅ client.page("cnn-homepage")
+**Important:**
+- `tsx` transpiles but doesn't type-check - errors ignored
+- `page.evaluate()` runs in browser - use plain JS only:
+  ```typescript
+  ✅ await page.evaluate(() => document.body.innerText);
+  ❌ await page.evaluate(() => { const el: HTMLElement = document.body; });
+  ```
 
 ## Workflow Loop
 
@@ -297,22 +166,76 @@ const formResult = await client.fillForm("name", { "Card Number": "4242..." }); 
 
 The `page` object is a standard Playwright Page—use normal Playwright methods.
 
+## Pattern Library
+
+Reusable high-level helpers for common flows. Import from `patterns.ts`:
+
+```typescript
+import { login, fillAndSubmit, modal, responsive } from "./patterns";
+
+// WordPress/form login
+await login(page, {
+  url: 'https://site.com/wp-login.php',
+  user: 'admin',
+  pass: 'password'
+});
+
+// Fill + submit (works cross-frame for Stripe/PayPal)
+await fillAndSubmit(page, {
+  fields: { 'email': 'user@test.com', 'message': 'Hello' },
+  submit: 'button[type="submit"]',
+  waitFor: '.success-message'
+});
+
+// Modal interaction
+await modal(page, {
+  open: '.open-settings',
+  action: '.save-button'
+});
+
+// Multi-viewport screenshots
+await responsive(page, {
+  url: 'https://site.com',
+  screenshots: '/tmp/responsive'
+});
+```
+
+**See [`PATTERNS.md`](PATTERNS.md) for full API reference.**
+
+## YAML Scenarios
+
+Declarative browser automation flows. Define multi-step workflows in YAML, execute with `--scenario`.
+
+**Quick example** (`scenarios/examples/wp-login.yaml`):
+```yaml
+name: wp-login
+variables:
+  WP_URL: ${WP_URL:-http://localhost:8080}
+  WP_USER: ${WP_USER:-admin}
+  WP_PASS: ${WP_PASS:-admin}
+steps:
+  - login:
+      url: "{{WP_URL}}/wp-login.php"
+      username: "{{WP_USER}}"
+      password: "{{WP_PASS}}"
+  - screenshot: dashboard.png
+```
+
+**Run:** `~/Tools/dev-browser.sh --scenario wp-login`
+
+**Features:**
+- Variable substitution with env fallbacks
+- Pattern shortcuts (`login`, `fillForm`, `modal`, `responsive`)
+- Assertions, conditionals, error handling
+- Auto-compiles to TypeScript
+
+**See [`scenarios/SCHEMA.md`](scenarios/SCHEMA.md) for complete schema reference.**
+
 ## Waiting
 
 ### ❌ Anti-Pattern: setTimeout/sleep
 
-**NEVER use `setTimeout` or sleep for waiting.** It's flaky, slow, and unpredictable:
-
-```typescript
-// ❌ BAD - Don't do this
-await button.click();
-await new Promise(r => setTimeout(r, 2000)); // Wastes 2s even if ready in 100ms
-await page.screenshot({ path: '/tmp/result.png' });
-
-// ❌ BAD - Also don't do this
-await page.goto(url, { waitUntil: 'networkidle' });
-await new Promise(r => setTimeout(r, 2000)); // Redundant! Already waited for networkidle
-```
+**NEVER use `setTimeout`** - flaky, slow, unpredictable. Use event-based waits below.
 
 ### ✅ Event-Based Waiting (Use These Instead)
 
@@ -382,149 +305,57 @@ await page.screenshot({ path: "tmp/full.png", fullPage: true });
 
 ### ARIA Snapshot (Element Discovery)
 
-Use `getAISnapshot()` when you don't know the page layout and need to discover what elements are available. It returns a YAML-formatted accessibility tree with:
+`getAISnapshot()` returns YAML-formatted accessibility tree with semantic roles, names, states, and stable `[ref=eN]` for interaction.
 
-- **Semantic roles** (button, link, textbox, heading, etc.)
-- **Accessible names** (what screen readers would announce)
-- **Element states** (checked, disabled, expanded, etc.)
-- **Stable refs** that persist across script executions
-
-Script (`~/Tools/dev-browser-scripts/{project}/get-snapshot.ts`):
 ```typescript
-const client = await connect();
-const page = await client.page("main");
-await page.goto("https://news.ycombinator.com");
-await waitForPageLoad(page);
 const snapshot = await client.getAISnapshot("main");
 console.log(snapshot);
-await client.disconnect();
 ```
 
-Run: `~/Tools/dev-browser.sh --run {project}/get-snapshot`
-
-#### Example Output
-
-The snapshot is YAML-formatted with semantic structure:
-
+**Example output:**
 ```yaml
 - banner:
   - link "Hacker News" [ref=e1]
   - navigation:
     - link "new" [ref=e2]
-    - link "past" [ref=e3]
-    - link "comments" [ref=e4]
-    - link "ask" [ref=e5]
-    - link "submit" [ref=e6]
-  - link "login" [ref=e7]
+    - link "submit" [ref=e3]
 - main:
   - list:
     - listitem:
-      - link "Article Title Here" [ref=e8]
-      - text: "528 points by username 3 hours ago"
-      - link "328 comments" [ref=e9]
-- contentinfo:
-  - textbox [ref=e10]
-    - /placeholder: "Search"
+      - link "Article Title" [ref=e4]
+      - link "328 comments" [ref=e5]
 ```
 
-#### Interpreting the Snapshot
+**Attributes:**
+- `[ref=eN]` - Interaction handle | `[checked]` - Checked | `[disabled]` - Disabled | `[level=N]` - Heading level
+- `/url:` - Link URL | `/placeholder:` - Input placeholder
 
-- **Roles** - Semantic element types: `button`, `link`, `textbox`, `heading`, `listitem`, etc.
-- **Names** - Accessible text in quotes: `link "Click me"`, `button "Submit"`
-- **`[ref=eN]`** - Element reference for interaction. Only assigned to visible, clickable elements
-- **`[checked]`** - Checkbox/radio is checked
-- **`[disabled]`** - Element is disabled
-- **`[expanded]`** - Expandable element (details, accordion) is open
-- **`[level=N]`** - Heading level (h1=1, h2=2, etc.)
-- **`/url:`** - Link URL (shown as a property)
-- **`/placeholder:`** - Input placeholder text
-
-#### Interacting with Refs
-
-Use `selectSnapshotRef()` to get a Playwright ElementHandle for any ref:
-
-Script (`~/Tools/dev-browser-scripts/{project}/click-ref.ts`):
+**Interact with refs:**
 ```typescript
-const client = await connect();
-const page = await client.page("main");
-await page.goto("https://news.ycombinator.com");
-await waitForPageLoad(page);
-
-// Get snapshot to see refs
-const snapshot = await client.getAISnapshot("main");
-console.log(snapshot);
-// Output shows: - link "new" [ref=e2]
-
-// Click element by ref
 const element = await client.selectSnapshotRef("main", "e2");
 await element.click();
-await waitForPageLoad(page);
-console.log("Navigated to:", page.url());
-await client.disconnect();
 ```
-
-Run: `~/Tools/dev-browser.sh --run {project}/click-ref`
 
 ## Working with Iframes (Stripe, PayPal, etc.)
 
-Payment forms and embedded widgets often use iframes that are invisible to normal selectors. Use `findInFrames()` and `fillForm()` to work with these.
+Payment widgets use iframes invisible to normal selectors.
 
-### Finding Elements in Iframes
-
-`findInFrames()` searches all frames (main + nested) for an element:
-
-Script (`~/Tools/dev-browser-scripts/{project}/find-in-iframe.ts`):
+**`findInFrames(pageName, selector, options?)`** - Search all frames:
 ```typescript
-const client = await connect();
-const page = await client.page("main");
-await page.goto("https://example.com/checkout");
-await waitForPageLoad(page);
-
-// Find card input in Stripe iframe
 const result = await client.findInFrames("main", 'input[name="cardnumber"]');
-if (result.element) {
-  console.log("Found in:", result.frameInfo);
-  await result.element.fill("4242424242424242");
-} else {
-  console.log("Not found:", result.frameInfo);
-}
-await client.disconnect();
+if (result.element) await result.element.fill("4242424242424242");
 ```
+Options: `timeout` (5000ms), `includeMainFrame` (true)
 
-### Smart Form Filling
-
-`fillForm()` finds fields by label, name, placeholder, or aria-label—across all frames:
-
-Script (`~/Tools/dev-browser-scripts/{project}/fill-checkout.ts`):
+**`fillForm(pageName, fields, options?)`** - Smart fill by label/name/placeholder across frames:
 ```typescript
-const client = await connect();
-const page = await client.page("main");
-await page.goto("https://example.com/checkout");
-await waitForPageLoad(page);
-
 const result = await client.fillForm("main", {
   "Card Number": "4242424242424242",
-  "Expiration Date": "12/25",
-  "CVC": "123",
-  "Name on Card": "Test User"
+  "CVC": "123"
 }, { submit: true });
-
-console.log("Filled:", result.filled);
-console.log("Not found:", result.notFound);
-console.log("Submitted:", result.submitted);
-await client.disconnect();
+console.log(result.filled, result.notFound, result.submitted);
 ```
-
-### Options
-
-**findInFrames options:**
-- `timeout` - Max wait time in ms (default: 5000)
-- `includeMainFrame` - Search main frame too (default: true)
-
-**fillForm options:**
-- `timeout` - Max wait per field in ms (default: 5000)
-- `submit` - Click submit button after filling (default: false)
-- `clear` - Clear fields before filling (default: true)
+Options: `timeout` (5000ms), `submit` (false), `clear` (true)
 
 ## Debugging Tips
 

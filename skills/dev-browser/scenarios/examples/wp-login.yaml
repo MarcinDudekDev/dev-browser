@@ -1,0 +1,44 @@
+name: wp-login
+description: WordPress admin login with dashboard verification
+page: admin
+
+variables:
+  WP_URL: ${WP_URL:-http://localhost:8080}
+  WP_USER: ${WP_USER:-admin}
+  WP_PASS: ${WP_PASS:-admin}
+
+steps:
+  # Navigate to login page
+  - goto: "{{WP_URL}}/wp-login.php"
+  - wait: load
+
+  # Login using pattern
+  - login:
+      url: "{{WP_URL}}/wp-login.php"
+      username: "{{WP_USER}}"
+      password: "{{WP_PASS}}"
+
+  # Verify dashboard loaded
+  - wait: load
+    assert:
+      - { url: "**/wp-admin/**" }
+      - { visible: "#adminmenu" }
+      - { titleContains: "Dashboard" }
+
+  # Check welcome panel is present
+  - if:
+      exists: ".welcome-panel"
+    then:
+      - screenshot: dashboard-with-welcome.png
+    else:
+      - screenshot: dashboard-clean.png
+
+  # Navigate to users page as additional verification
+  - goto: "{{WP_URL}}/wp-admin/users.php"
+  - wait: load
+    assert:
+      - { visible: ".wp-heading-inline" }
+      - { titleContains: "Users" }
+
+  # Final dashboard screenshot
+  - screenshot: wp-admin-dashboard.png

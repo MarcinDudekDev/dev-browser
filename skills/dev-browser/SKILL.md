@@ -26,10 +26,12 @@ cd skills/dev-browser && ./install.sh
 
 ```bash
 # Built-in commands
-~/Tools/dev-browser.sh --run goto https://example.com
+~/Tools/dev-browser.sh --run goto https://example.com  # Navigate + auto-inspect (forms, buttons, links)
 ~/Tools/dev-browser.sh --run click "Submit"
+~/Tools/dev-browser.sh --run links          # Get all links from current page (50 max)
+~/Tools/dev-browser.sh --run links all      # Get ALL links (no limit)
 ~/Tools/dev-browser.sh --screenshot main
-~/Tools/dev-browser.sh --inspect main  # Show forms/elements
+~/Tools/dev-browser.sh --inspect main       # Detailed inspection + ARIA snapshot
 
 # Custom scripts: ~/Tools/dev-browser-scripts/{project}/script.ts
 ~/Tools/dev-browser.sh --run myproject/login
@@ -37,6 +39,16 @@ cd skills/dev-browser && ./install.sh
 # YAML scenarios: Declarative flows
 ~/Tools/dev-browser.sh --scenario wp-login
 ~/Tools/dev-browser.sh --scenarios  # List available
+```
+
+#### Client Flags
+
+- `--cachebust` - Add cache-busting query param (`?v=timestamp`) to URLs for bypassing browser cache during navigation
+
+Example:
+```bash
+~/Tools/dev-browser.sh --run goto --cachebust https://example.com
+# Navigates to: https://example.com?v=1736279123456
 ```
 
 Script template (`~/Tools/dev-browser-scripts/myproject/test.ts`):
@@ -60,16 +72,19 @@ await client.disconnect();
 
 **Decision tree:**
 1. **Source code available?** → Read code, use exact selectors
-2. **Forms/buttons/links?** → `--inspect main` (sufficient 80% of time)
-3. **Complex/dynamic page?** → `getAISnapshot()` (full ARIA tree)
-4. **Visual verification?** → `--screenshot main` (NOT for selectors)
+2. **After navigation?** → `goto` output has forms/buttons/links (auto-inspect)
+3. **Need more links?** → `--run links` or `--run links all`
+4. **Complex/dynamic page?** → `--inspect` or `getAISnapshot()` (full ARIA tree)
+5. **Visual verification?** → `--screenshot main` (NOT for selectors)
 
 | Method | Token Cost | Output | Use Case |
 |--------|-----------|--------|----------|
 | Source code | 0 | Exact selectors | Local/project sites |
-| --inspect | Low | Forms, buttons, links + refs | Most interactions |
-| --snapshot | Medium | Full ARIA tree | Complex pages |
-| --screenshot | High | Visual only | Verification |
+| `goto` output | Low | Forms, inputs, buttons, iframes, links (15) | After navigation |
+| `--run links` | Low | All links (50 or unlimited) | Navigation discovery |
+| `--inspect` | Medium | Forms + ARIA snapshot refs | Detailed inspection |
+| `getAISnapshot()` | Medium | Full ARIA tree | Complex pages |
+| `--screenshot` | High | Visual only | Verification |
 
 ## Setup
 

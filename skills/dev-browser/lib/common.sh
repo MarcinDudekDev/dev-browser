@@ -25,17 +25,11 @@ log_debug() {
     fi
 }
 
-# Check if server is truly healthy (wsEndpoint available, not just port)
+# Check if server is truly healthy (uses /health endpoint)
 check_server_health() {
     local response
-    response=$(curl -s --connect-timeout 2 "http://localhost:$SERVER_PORT" 2>/dev/null)
-    if [[ $? -ne 0 ]]; then
-        return 1
-    fi
-    if echo "$response" | grep -q "wsEndpoint"; then
-        return 0
-    fi
-    return 1
+    response=$(curl -s --connect-timeout 2 "http://localhost:$SERVER_PORT/health" 2>/dev/null)
+    [[ "$response" == "ok" ]]
 }
 
 # Print friendly error with recovery instructions
@@ -55,11 +49,26 @@ print_server_error() {
     echo "=========================" >&2
 }
 
-# Get project prefix from cwd
+# Cache file for project prefixes (avoids spawning Python repeatedly)
+PREFIX_CACHE_FILE="$SKILL_TMP_DIR/prefix-cache"
+
+# Get project prefix from cwd (cached per-session)
 get_project_prefix() {
     local cwd="$PWD"
+
+    # Check cache first (format: path|prefix per line)
+    if [[ -f "$PREFIX_CACHE_FILE" ]]; then
+        local cached
+        cached=$(grep "^${cwd}|" "$PREFIX_CACHE_FILE" 2>/dev/null | head -1 | cut -d'|' -f2)
+        if [[ -n "$cached" ]]; then
+            printf '%s' "$cached"
+            return
+        fi
+    fi
+
+    # Compute prefix
+    local prefix=""
     if [[ -f "$HOME/.claude/projects.json" ]]; then
-        local prefix
         prefix=$(python3 -c "
 import json, os
 cwd = '$cwd'
@@ -77,13 +86,24 @@ if found:
     print(found, end='')
 else:
     print(os.path.basename(cwd).lower().replace(' ', '-')[:20], end='')
-")
-        if [[ -n "$prefix" ]]; then
-            printf '%s' "$prefix"
-            return
-        fi
+" 2>/dev/null)
     fi
-    basename "$cwd" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | cut -c1-20 | tr -d '\n'
+
+    # Fallback if Python failed
+    if [[ -z "$prefix" ]]; then
+        prefix=$(basename "$cwd" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | cut -c1-20 | tr -d '\n')
+    fi
+
+    # Cache the result (keep last 50 entries)
+    if [[ -n "$prefix" ]]; then
+        mkdir -p "$(dirname "$PREFIX_CACHE_FILE")"
+        # Remove old entry if exists, add new one
+        grep -v "^${cwd}|" "$PREFIX_CACHE_FILE" 2>/dev/null | tail -49 > "$PREFIX_CACHE_FILE.tmp" 2>/dev/null || true
+        printf '%s|%s\n' "$cwd" "$prefix" >> "$PREFIX_CACHE_FILE.tmp"
+        mv "$PREFIX_CACHE_FILE.tmp" "$PREFIX_CACHE_FILE"
+    fi
+
+    printf '%s' "$prefix"
 }
 
 # Get per-project paths for screenshots and temp scripts

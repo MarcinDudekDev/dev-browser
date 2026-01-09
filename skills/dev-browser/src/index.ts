@@ -193,6 +193,11 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     res.json(response);
   });
 
+  // GET /health - quick health check (no JSON parsing needed)
+  app.get("/health", (_req: Request, res: Response) => {
+    res.status(200).send("ok");
+  });
+
   // GET /pages - list all pages
   app.get("/pages", (_req: Request, res: Response) => {
     const response: ListPagesResponse = {

@@ -1,11 +1,44 @@
 #!/bin/bash
 # Server management functions
 
+CDP_PORT=9223
+
+# Cleanup orphaned about:blank tabs (silent, runs in background)
+cleanup_orphaned_tabs() {
+    # Quick check if CDP is available
+    curl -s --connect-timeout 1 "http://localhost:$CDP_PORT/json/list" 2>/dev/null | python3 -c "
+import sys, json, urllib.request
+
+try:
+    tabs = json.load(sys.stdin)
+except:
+    sys.exit(0)
+
+blank = [t for t in tabs if t.get('url','').startswith('about:blank')]
+if not blank:
+    sys.exit(0)
+
+closed = 0
+for t in blank:
+    target_id = t.get('id')
+    if target_id:
+        try:
+            urllib.request.urlopen(f'http://localhost:$CDP_PORT/json/close/{target_id}', timeout=1)
+            closed += 1
+        except:
+            pass
+
+if closed > 0:
+    print(f'Cleaned up {closed} orphaned tabs', file=sys.stderr)
+" 2>&1 &
+}
+
 start_server() {
     log_debug "start_server called from $(pwd)"
 
     if check_server_health; then
         log_debug "Server already healthy"
+        cleanup_orphaned_tabs
         return 0
     fi
 
@@ -48,6 +81,10 @@ start_server() {
 
     log_debug "Server ready after ${count}s"
     echo "Server ready on port $SERVER_PORT" >&2
+
+    # Cleanup orphaned tabs in background
+    cleanup_orphaned_tabs
+
     return 0
 }
 

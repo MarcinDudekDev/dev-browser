@@ -51,9 +51,9 @@ const info = await page.evaluate(() => {
 if (info.forms.length > 0) {
     console.log("=== FORMS ===");
     info.forms.forEach((f, i) => {
-        console.log(`Form #${i + 1}: id="${f.id}" action="${f.action}"`);
+        console.log(\`Form #\${i + 1}: id="\${f.id}" action="\${f.action}"\`);
         f.fields.forEach(field => {
-            console.log(`  [${field.tag}] name="${field.name}" type="${field.type}" value="${field.value}"`);
+            console.log(\`  [\${field.tag}] name="\${field.name}" type="\${field.type}" value="\${field.value}"\`);
         });
     });
     console.log("");
@@ -63,8 +63,8 @@ if (info.iframes.length > 0) {
     console.log("=== IFRAMES ===");
     info.iframes.forEach(f => {
         const badge = f.isStripe ? " [STRIPE]" : "";
-        console.log(`  name="${f.name}"${badge}`);
-        console.log(`    src: ${f.src}`);
+        console.log(\`  name="\${f.name}"\${badge}\`);
+        console.log(\`    src: \${f.src}\`);
     });
     console.log("");
 }
@@ -72,7 +72,7 @@ if (info.iframes.length > 0) {
 if (info.orphanInputs.length > 0) {
     console.log("=== INPUTS (outside forms) ===");
     info.orphanInputs.forEach(field => {
-        console.log(`  [${field.tag}] name="${field.name}" type="${field.type}"`);
+        console.log(\`  [\${field.tag}] name="\${field.name}" type="\${field.type}"\`);
     });
     console.log("");
 }

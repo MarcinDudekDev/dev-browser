@@ -1,5 +1,7 @@
 // Fill form field by name/label
 // Usage: --run fill "fieldname=value" or "label:value"
+import { discoverElements, printDiscovery } from "@/discover.js";
+
 const args = process.env.SCRIPT_ARGS || "";
 if (!args) {
     console.error("Usage: dev-browser.sh --run fill 'fieldname=value'");
@@ -43,7 +45,15 @@ if (!filled) {
 
 if (!filled) {
     console.error("Could not find field:", field);
+    // Still show what's available for debugging
+    const elements = await discoverElements(page);
+    printDiscovery(elements, "Available elements");
+    await client.disconnect();
     process.exit(1);
 }
+
+// Show what's available after filling
+const elements = await discoverElements(page);
+printDiscovery(elements, "After fill");
 
 await client.disconnect();

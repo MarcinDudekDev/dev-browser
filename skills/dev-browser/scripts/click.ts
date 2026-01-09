@@ -1,4 +1,6 @@
 // Click element by text or selector
+import { discoverElements, printDiscovery } from "@/discover.js";
+
 const target = process.env.SCRIPT_ARGS || "";
 if (!target) {
     console.error("Usage: dev-browser.sh --run click '<button text>' or 'selector'");
@@ -23,5 +25,9 @@ try {
 }
 
 await waitForPageLoad(page);
-console.log("Current URL:", page.url());
+
+// Show what's available now
+const elements = await discoverElements(page);
+printDiscovery(elements, "After click");
+
 await client.disconnect();

@@ -37,23 +37,22 @@ for (let i = 0; i < commands.length; i++) {
       }
 
       case "click": {
-        // Try button, then link, then selector
-        let clicked = false;
-        try {
-          await page.getByRole("button", { name: arg }).click({ timeout: 5000 });
+        // Check existence first, then click - fail fast
+        const btn = page.getByRole("button", { name: arg });
+        const link = page.getByRole("link", { name: arg });
+        const sel = page.locator(arg).first();
+
+        if (await btn.count() > 0) {
+          await btn.click();
           console.log("  → Clicked button:", arg);
-          clicked = true;
-        } catch {}
-        if (!clicked) {
-          try {
-            await page.getByRole("link", { name: arg }).click({ timeout: 5000 });
-            console.log("  → Clicked link:", arg);
-            clicked = true;
-          } catch {}
-        }
-        if (!clicked) {
-          await page.locator(arg).first().click({ timeout: 10000 });
+        } else if (await link.count() > 0) {
+          await link.click();
+          console.log("  → Clicked link:", arg);
+        } else if (await sel.count() > 0) {
+          await sel.click();
           console.log("  → Clicked selector:", arg);
+        } else {
+          throw new Error(`Element not found: ${arg}`);
         }
         await waitForPageLoad(page);
         break;

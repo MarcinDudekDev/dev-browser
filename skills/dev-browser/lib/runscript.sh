@@ -1,10 +1,42 @@
 #!/bin/bash
-# Default script execution
+# Default script execution with auto-recovery
+
+# Check for crash info and notify agent
+check_crash_recovery() {
+    local sessions_file="$SKILL_TMP_DIR/sessions.json"
+    if [[ -f "$sessions_file" ]]; then
+        local crashed_at
+        crashed_at=$(python3 -c "import json; d=json.load(open('$sessions_file')); print(d.get('crashedAt',''))" 2>/dev/null)
+        if [[ -n "$crashed_at" ]]; then
+            echo "" >&2
+            echo "=== DEV-BROWSER RECOVERY ===" >&2
+            echo "Previous session crashed at $crashed_at" >&2
+            python3 -c "
+import json
+d = json.load(open('$sessions_file'))
+pages = d.get('lostPages', [])
+if pages:
+    print('Lost pages that need re-navigation:', file=__import__('sys').stderr)
+    for p in pages:
+        print(f'  - {p}', file=__import__('sys').stderr)
+    print('', file=__import__('sys').stderr)
+    print('Chrome may have restored the tabs, but you need to re-register them.', file=__import__('sys').stderr)
+    print('Tip: Navigate to your test URL again with page.goto()', file=__import__('sys').stderr)
+" 2>/dev/null
+            echo "===========================" >&2
+            echo "" >&2
+            return 0  # crash detected
+        fi
+    fi
+    return 1  # no crash
+}
 
 run_script() {
     local script_file="$1"
     local PREFIX=$(get_project_prefix)
     local SCRIPT=""
+    local MAX_RETRIES=1
+    local retry_count=0
 
     # Read script from file or stdin
     if [[ -n "$script_file" && -f "$script_file" ]]; then
@@ -63,5 +95,49 @@ const { waitForPageLoad, waitForElement, waitForElementGone, waitForCondition, w
 ${SCRIPT}
 ENDOFSCRIPT
 
-    cd "$DEV_BROWSER_DIR" && exec ./node_modules/.bin/tsx "$TEMP_SCRIPT"
+    # Run with retry on server failure
+    while true; do
+        cd "$DEV_BROWSER_DIR"
+        local output
+        local exit_code
+        output=$(./node_modules/.bin/tsx "$TEMP_SCRIPT" 2>&1)
+        exit_code=$?
+
+        # Success - print output and exit
+        if [[ $exit_code -eq 0 ]]; then
+            echo "$output"
+            return 0
+        fi
+
+        # Check if this is a server connection error
+        if echo "$output" | grep -qE "ECONNREFUSED|ECONNRESET|EPIPE|fetch failed|socket hang up"; then
+            retry_count=$((retry_count + 1))
+            if [[ $retry_count -le $MAX_RETRIES ]]; then
+                echo "" >&2
+                echo "=== SERVER CONNECTION FAILED ===" >&2
+                echo "Attempting recovery (retry $retry_count/$MAX_RETRIES)..." >&2
+
+                # Stop and restart server
+                stop_server 2>/dev/null
+                sleep 1
+                start_server || {
+                    echo "Failed to restart server" >&2
+                    echo "$output"
+                    return 1
+                }
+
+                # Check for crash recovery info
+                check_crash_recovery
+
+                echo "Retrying script..." >&2
+                echo "===========================" >&2
+                echo "" >&2
+                continue
+            fi
+        fi
+
+        # Non-recoverable error or max retries reached
+        echo "$output"
+        return $exit_code
+    done
 }

@@ -1,12 +1,53 @@
 import { serve } from "@/index.js";
 import { execSync } from "child_process";
-import { mkdirSync, existsSync, readdirSync } from "fs";
+import { mkdirSync, existsSync, readdirSync, appendFileSync, writeFileSync, readFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const tmpDir = join(__dirname, "..", "tmp");
 const profileDir = join(__dirname, "..", "profiles");
+const crashLogFile = join(tmpDir, "crash.log");
+const sessionFile = join(tmpDir, "sessions.json");
+
+// Crash logging helper
+function logCrash(message: string) {
+  const timestamp = new Date().toISOString();
+  const entry = `[${timestamp}] ${message}\n`;
+  try {
+    appendFileSync(crashLogFile, entry);
+  } catch {
+    // Best effort
+  }
+  console.error(entry.trim());
+}
+
+// Track active sessions for loss notification
+interface SessionInfo {
+  pages: string[];
+  startedAt: string;
+  crashedAt?: string;
+  lostPages?: string[];
+}
+
+function saveSessionInfo(info: SessionInfo) {
+  try {
+    writeFileSync(sessionFile, JSON.stringify(info, null, 2));
+  } catch {
+    // Best effort
+  }
+}
+
+function loadSessionInfo(): SessionInfo | null {
+  try {
+    if (existsSync(sessionFile)) {
+      return JSON.parse(readFileSync(sessionFile, "utf-8"));
+    }
+  } catch {
+    // Ignore
+  }
+  return null;
+}
 
 // Create tmp and profile directories if they don't exist
 console.log("Creating tmp directory...");
@@ -79,7 +120,6 @@ try {
     signal: AbortSignal.timeout(1000),
   });
   if (res.ok) {
-    console.log("Server already running on port 9222");
     process.exit(0);
   }
 } catch {
@@ -98,20 +138,109 @@ try {
   // No process on CDP port, which is expected
 }
 
+// Check for previous crash and notify
+const previousSession = loadSessionInfo();
+if (previousSession?.crashedAt) {
+  console.log("\n=== PREVIOUS SESSION CRASHED ===");
+  console.log(`Crashed at: ${previousSession.crashedAt}`);
+  if (previousSession.lostPages && previousSession.lostPages.length > 0) {
+    console.log(`Lost pages (will need to re-navigate):`);
+    previousSession.lostPages.forEach((p) => console.log(`  - ${p}`));
+  }
+  console.log("================================\n");
+  // Clear crash info after showing
+  saveSessionInfo({ pages: [], startedAt: new Date().toISOString() });
+}
+
 console.log("Starting dev browser server...");
 const headless = process.env.HEADLESS === "true";
-const server = await serve({
-  port: 9222,
-  headless,
-  profileDir,
-});
+let server: Awaited<ReturnType<typeof serve>>;
+
+try {
+  server = await serve({
+    port: 9222,
+    headless,
+    profileDir,
+  });
+} catch (err) {
+  logCrash(`Server failed to start: ${err}`);
+  throw err;
+}
 
 console.log(`Dev browser server started`);
 console.log(`  WebSocket: ${server.wsEndpoint}`);
 console.log(`  Tmp directory: ${tmpDir}`);
 console.log(`  Profile directory: ${profileDir}`);
+console.log(`  Crash log: ${crashLogFile}`);
 console.log(`\nReady`);
 console.log(`\nPress Ctrl+C to stop`);
+
+// Save initial session info
+saveSessionInfo({ pages: [], startedAt: new Date().toISOString() });
+
+// Log restored sessions after crash recovery
+async function logRestoredSessions() {
+  try {
+    // Wait for Chrome to restore sessions
+    await new Promise(r => setTimeout(r, 3000));
+
+    const res = await fetch("http://localhost:9222/pages");
+    if (!res.ok) return;
+
+    const data = await res.json() as { pages: string[] };
+    if (data.pages.length > 0) {
+      console.log(`Sessions restored: ${data.pages.length} pages active`);
+      data.pages.forEach(p => console.log(`  - ${p}`));
+
+      // Update session tracking
+      saveSessionInfo({
+        pages: data.pages,
+        startedAt: new Date().toISOString(),
+      });
+    }
+  } catch {
+    // Non-fatal
+  }
+}
+
+// Check for restored sessions in background
+logRestoredSessions();
+
+// Periodic page tracking (for crash recovery info)
+const pageTracker = setInterval(async () => {
+  try {
+    const res = await fetch("http://localhost:9222/pages");
+    if (res.ok) {
+      const data = await res.json() as { pages: string[] };
+      saveSessionInfo({
+        pages: data.pages,
+        startedAt: new Date().toISOString(),
+      });
+    }
+  } catch {
+    // Server might be shutting down
+  }
+}, 30000); // Every 30 seconds
+
+// Handle crash - save lost pages info
+const handleCrash = (reason: string) => {
+  logCrash(reason);
+  const session = loadSessionInfo();
+  if (session) {
+    session.crashedAt = new Date().toISOString();
+    session.lostPages = session.pages;
+    saveSessionInfo(session);
+  }
+  clearInterval(pageTracker);
+};
+
+process.on("uncaughtException", (err) => {
+  handleCrash(`Uncaught exception: ${err.message}`);
+});
+
+process.on("unhandledRejection", (err) => {
+  handleCrash(`Unhandled rejection: ${err}`);
+});
 
 // Keep the process running
 await new Promise(() => {});

@@ -45,6 +45,15 @@ run_script() {
         SCRIPT=$(cat)
     fi
 
+    # Strip boilerplate for backward compatibility with existing scripts
+    # Remove: const client = await connect();
+    # Remove: const page = await client.page("...");
+    # Remove: await client.disconnect();
+    SCRIPT=$(echo "$SCRIPT" | sed -E \
+        -e '/^[[:space:]]*(const|let|var)[[:space:]]+client[[:space:]]*=[[:space:]]*await[[:space:]]+connect\(\)/d' \
+        -e '/^[[:space:]]*(const|let|var)[[:space:]]+page[[:space:]]*=[[:space:]]*await[[:space:]]+client\.page\(/d' \
+        -e '/^[[:space:]]*await[[:space:]]+client\.disconnect\(\)/d')
+
     # Create temp script file with .mts extension for ESM support
     get_project_paths  # sets PROJECT_TMP_DIR
     local TEMP_SCRIPT
@@ -91,8 +100,15 @@ const connect = async (url?: string) => {
 };
 const { waitForPageLoad, waitForElement, waitForElementGone, waitForCondition, waitForURL, waitForNetworkIdle } = await import("@/client.js");
 
+// Auto-injected: client and page (from -p flag, default "main")
+const client = await connect();
+const page = await client.page("${PAGE_NAME:-main}");
+
 // User script starts here
 ${SCRIPT}
+
+// Auto-disconnect (injected by wrapper)
+await client.disconnect();
 ENDOFSCRIPT
 
     # Run with retry on server failure
@@ -134,6 +150,21 @@ ENDOFSCRIPT
                 echo "" >&2
                 continue
             fi
+        fi
+
+        # Check for common boilerplate mistakes
+        if echo "$output" | grep -qE "Cannot redeclare.*'(client|page)'|Identifier '(client|page)' has already been declared"; then
+            echo "" >&2
+            echo "=== SCRIPT ERROR: Duplicate declarations ===" >&2
+            echo "client and page are AUTO-INJECTED - remove these lines from your script:" >&2
+            echo "  - const client = await connect();" >&2
+            echo "  - const page = await client.page(\"...\");" >&2
+            echo "  - await client.disconnect();" >&2
+            echo "" >&2
+            echo "Just use 'page' and 'client' directly. Use -p flag for page name:" >&2
+            echo "  dev-browser.sh -p admin --run myscript.ts" >&2
+            echo "================================================" >&2
+            return 1
         fi
 
         # Non-recoverable error or max retries reached

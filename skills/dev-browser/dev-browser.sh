@@ -19,17 +19,28 @@ LIB_DIR="$DEV_BROWSER_DIR/lib"
 # Source common functions
 source "$LIB_DIR/common.sh"
 
-# Handle --cachebust flag
+# Handle global flags: --cachebust, -p/--page
 CACHEBUST_FLAG=0
+PAGE_NAME="main"  # Default page name
 NEW_ARGS=()
-for arg in "$@"; do
-    if [[ "$arg" == "--cachebust" ]]; then
-        CACHEBUST_FLAG=1
-    else
-        NEW_ARGS+=("$arg")
-    fi
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --cachebust)
+            CACHEBUST_FLAG=1
+            shift
+            ;;
+        -p|--page)
+            PAGE_NAME="$2"
+            shift 2
+            ;;
+        *)
+            NEW_ARGS+=("$1")
+            shift
+            ;;
+    esac
 done
 [[ $CACHEBUST_FLAG -eq 1 ]] && export CACHEBUST=1
+export PAGE_NAME
 set -- "${NEW_ARGS[@]}"
 
 # Dispatch commands

@@ -41,26 +41,32 @@ cd skills/dev-browser && ./install.sh
 ~/Tools/dev-browser.sh --scenarios  # List available
 ```
 
-#### Client Flags
+#### Global Flags
 
-- `--cachebust` - Add cache-busting query param (`?v=timestamp`) to URLs for bypassing browser cache during navigation
+- `-p PAGE` / `--page PAGE` - Target page name (default: "main"). Use to work with different browser tabs.
+- `--cachebust` - Add cache-busting query param (`?v=timestamp`) to URLs for bypassing browser cache
 
-Example:
+Examples:
 ```bash
-~/Tools/dev-browser.sh --run goto --cachebust https://example.com
-# Navigates to: https://example.com?v=1736279123456
+~/Tools/dev-browser.sh --run myscript.ts                # Uses page "main" (default)
+~/Tools/dev-browser.sh -p admin --run myscript.ts       # Uses page "admin"
+~/Tools/dev-browser.sh -p checkout --chain "goto ..."   # Uses page "checkout"
+~/Tools/dev-browser.sh --cachebust --run goto https://example.com
 ```
 
-Script template (`~/Tools/dev-browser-scripts/myproject/test.ts`):
+**Script template** (`~/Tools/dev-browser-scripts/myproject/test.ts`):
 ```typescript
-// connect, waitForPageLoad auto-imported
-const client = await connect();
-const page = await client.page("main");
+// client and page are AUTO-INJECTED - do NOT add connect()/page() boilerplate!
+// Default page is "main", override with: dev-browser.sh -p other --run script
 await page.goto("https://example.com");
 await waitForPageLoad(page);
 console.log(await page.title());
-await client.disconnect();
 ```
+
+**⚠️ IMPORTANT:** `client` and `page` are automatically available. Do NOT add:
+- ~~`const client = await connect();`~~
+- ~~`const page = await client.page("main");`~~
+- ~~`await client.disconnect();`~~
 
 **⚠️ Use script files, NOT heredocs** - better debugging/reusability.
 
@@ -129,19 +135,17 @@ Save to `~/Tools/dev-browser-scripts/{project}/script.ts`, run with `--run {proj
 **Principles:**
 - **Small scripts**: ONE action per script (navigate, click, fill, check)
 - **Log state**: Always output state at end to decide next step
-- **Descriptive page names**: `"checkout"` not `"main"`, `"login"` not `"page1"`
-- **Disconnect to exit**: `await client.disconnect()` at end
+- **Use -p flag for page names**: `dev-browser.sh -p checkout --run script` instead of hardcoding
 - **Plain JS in evaluate()**: No TypeScript syntax in browser context
 
 ```typescript
-// Template
-const client = await connect();
-const page = await client.page("descriptive-name");
+// Template - client and page are auto-injected!
 await page.goto("https://example.com");
 await waitForPageLoad(page);
 console.log({ title: await page.title(), url: page.url() });
-await client.disconnect();
 ```
+
+Run with different pages: `dev-browser.sh -p checkout --run myscript`
 
 **Important:**
 - `tsx` transpiles but doesn't type-check - errors ignored
@@ -164,19 +168,18 @@ Follow this pattern for complex tasks:
 ## Client API
 
 ```typescript
-const client = await connect();
-const page = await client.page("name"); // Get or create named page
+// client and page are auto-injected. Additional API:
+const page2 = await client.page("other"); // Get/create additional pages
 const pages = await client.list(); // List all page names
 await client.close("name"); // Close a page
-await client.disconnect(); // Disconnect (pages persist)
 
 // ARIA Snapshot methods for element discovery and interaction
-const snapshot = await client.getAISnapshot("name"); // Get ARIA accessibility tree
-const element = await client.selectSnapshotRef("name", "e5"); // Get element by ref
+const snapshot = await client.getAISnapshot("main"); // Get ARIA accessibility tree
+const element = await client.selectSnapshotRef("main", "e5"); // Get element by ref
 
 // Frame-aware helpers for embedded widgets (Stripe, PayPal, etc.)
-const result = await client.findInFrames("name", "input[name='card']"); // Find in any frame
-const formResult = await client.fillForm("name", { "Card Number": "4242..." }); // Smart form fill
+const result = await client.findInFrames("main", "input[name='card']"); // Find in any frame
+const formResult = await client.fillForm("main", { "Card Number": "4242..." }); // Smart form fill
 ```
 
 The `page` object is a standard Playwright Page—use normal Playwright methods.
@@ -390,13 +393,11 @@ If a script fails, the page state is preserved. You can:
 
 Or write a debug script (`~/Tools/dev-browser-scripts/{project}/debug.ts`):
 ```typescript
-const client = await connect();
-const page = await client.page("main");
+// client and page auto-injected
 await page.screenshot({ path: "/tmp/debug.png" });
 console.log({
   url: page.url(),
   title: await page.title(),
   bodyText: await page.textContent("body").then((t) => t?.slice(0, 200)),
 });
-await client.disconnect();
 ```

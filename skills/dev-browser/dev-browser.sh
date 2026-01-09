@@ -5,7 +5,7 @@
 # Server:     --server | --stop | --status
 # Screenshots: --screenshot | --snap | --diff | --baselines | --responsive | --resize
 # Inspect:    --inspect | --page-status | --console
-# Scripts:    --run <name> | --list | --scenario | --scenarios
+# Scripts:    --run <name> | --chain "cmd|cmd" | --list | --scenario | --scenarios
 # Diagnostics: --debug | --crashes | --tabs | --cleanup
 # Other:      --wplogin | --help
 
@@ -90,6 +90,16 @@ case "$1" in
             --scenario) cmd_scenario "$2"; exit $? ;;
             --scenarios) cmd_scenarios; exit 0 ;;
         esac
+        ;;
+
+    # Chain commands (special handling to preserve args)
+    --chain)
+        source "$LIB_DIR/server.sh"
+        source "$LIB_DIR/runscript.sh"
+        start_server || exit 1
+        export SCRIPT_ARGS="$2"
+        run_script "$BUILTIN_SCRIPTS_DIR/chain.ts"
+        exit $?
         ;;
 
     # WordPress login

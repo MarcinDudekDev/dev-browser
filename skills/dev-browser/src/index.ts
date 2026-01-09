@@ -1,6 +1,6 @@
 import express, { type Express, type Request, type Response } from "express";
 import { chromium, type BrowserContext, type Page } from "playwright";
-import { mkdirSync } from "fs";
+import { mkdirSync, existsSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import type { Socket } from "net";
 import type {
@@ -51,6 +51,68 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
   ]);
 }
 
+/**
+ * Fix Chrome preferences to prevent crash recovery dialog and auto-restore sessions.
+ * Must be called BEFORE launching browser.
+ */
+function fixChromePreferences(userDataDir: string): void {
+  const prefsPath = join(userDataDir, "Default", "Preferences");
+  const prefsDir = join(userDataDir, "Default");
+
+  // Ensure Default directory exists
+  mkdirSync(prefsDir, { recursive: true });
+
+  let prefs: Record<string, unknown> = {};
+
+  // Load existing preferences if they exist
+  if (existsSync(prefsPath)) {
+    try {
+      const content = readFileSync(prefsPath, "utf-8");
+      prefs = JSON.parse(content);
+      console.log("Loaded existing Chrome preferences");
+    } catch (err) {
+      console.warn("Could not parse Chrome preferences, creating new:", err);
+      prefs = {};
+    }
+  }
+
+  // Initialize nested objects if they don't exist
+  if (!prefs.profile || typeof prefs.profile !== "object") {
+    prefs.profile = {};
+  }
+  if (!prefs.session || typeof prefs.session !== "object") {
+    prefs.session = {};
+  }
+
+  const profile = prefs.profile as Record<string, unknown>;
+  const session = prefs.session as Record<string, unknown>;
+
+  // Check if this was a crash
+  const wasCrashed = profile.exit_type === "Crashed";
+  if (wasCrashed) {
+    console.log("Detected previous crash - fixing preferences for auto-restore");
+  }
+
+  // Fix settings to prevent crash dialog and enable auto-restore:
+  // 1. exit_type = "Normal" prevents "Chrome didn't shut down correctly" dialog
+  profile.exit_type = "Normal";
+
+  // 2. exited_cleanly = true also helps prevent the dialog
+  profile.exited_cleanly = true;
+
+  // 3. restore_on_startup = 1 means "Continue where you left off"
+  //    (0 = New Tab, 4 = specific URLs, 5 = reopen last open)
+  session.restore_on_startup = 1;
+
+  // Write back the fixed preferences
+  try {
+    writeFileSync(prefsPath, JSON.stringify(prefs, null, 2));
+    console.log("Chrome preferences fixed: exit_type=Normal, restore_on_startup=1");
+  } catch (err) {
+    console.error("Failed to write Chrome preferences:", err);
+  }
+}
+
 export async function serve(options: ServeOptions = {}): Promise<DevBrowserServer> {
   const port = options.port ?? 9222;
   const headless = options.headless ?? false;
@@ -77,12 +139,21 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
   mkdirSync(userDataDir, { recursive: true });
   console.log(`Using persistent browser profile: ${userDataDir}`);
 
+  // Fix Chrome preferences BEFORE launch to prevent crash dialog
+  fixChromePreferences(userDataDir);
+
   console.log("Launching browser with persistent context...");
 
   // Launch persistent context - this persists cookies, localStorage, cache, etc.
   const context: BrowserContext = await chromium.launchPersistentContext(userDataDir, {
     headless,
-    args: [`--remote-debugging-port=${cdpPort}`],
+    args: [
+      `--remote-debugging-port=${cdpPort}`,
+      // Auto-restore sessions after crash (no dialog)
+      "--restore-last-session",
+      // Disable crash recovery bubble (auto-restore instead)
+      "--disable-session-crashed-bubble",
+    ],
   });
   console.log("Browser launched with persistent profile...");
 
@@ -250,23 +321,51 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     process.exit(0);
   };
 
-  const errorHandler = async (err: unknown) => {
-    console.error("Unhandled error:", err);
-    await cleanup();
-    process.exit(1);
+  // Error handler - log but DON'T exit for recoverable errors
+  const errorHandler = (err: unknown, type: string) => {
+    const timestamp = new Date().toISOString();
+    const errMsg = err instanceof Error ? err.stack || err.message : String(err);
+    console.error(`[${timestamp}] ${type}: ${errMsg}`);
+
+    // Only exit on truly fatal errors
+    const errStr = String(err).toLowerCase();
+    const fatalPatterns = [
+      "cannot find module",
+      "eaddrinuse",
+      "out of memory",
+      "heap out of memory",
+    ];
+
+    const isFatal = fatalPatterns.some((p) => errStr.includes(p));
+    if (isFatal) {
+      console.error(`[${timestamp}] FATAL ERROR - server will exit`);
+      cleanup().finally(() => process.exit(1));
+    } else {
+      console.error(`[${timestamp}] Recoverable error - server continues`);
+    }
   };
 
   // Register handlers
   signals.forEach((sig) => process.on(sig, signalHandler));
-  process.on("uncaughtException", errorHandler);
-  process.on("unhandledRejection", errorHandler);
+  process.on("uncaughtException", (err) => errorHandler(err, "uncaughtException"));
+  process.on("unhandledRejection", (err) => errorHandler(err, "unhandledRejection"));
   process.on("exit", syncCleanup);
+
+  // Wrapped error handlers for removal
+  const uncaughtHandler = (err: unknown) => errorHandler(err, "uncaughtException");
+  const rejectionHandler = (err: unknown) => errorHandler(err, "unhandledRejection");
+
+  // Re-register with the wrappers for proper removal
+  process.off("uncaughtException", uncaughtHandler);
+  process.off("unhandledRejection", rejectionHandler);
+  process.on("uncaughtException", uncaughtHandler);
+  process.on("unhandledRejection", rejectionHandler);
 
   // Helper to remove all handlers
   const removeHandlers = () => {
     signals.forEach((sig) => process.off(sig, signalHandler));
-    process.off("uncaughtException", errorHandler);
-    process.off("unhandledRejection", errorHandler);
+    process.off("uncaughtException", uncaughtHandler);
+    process.off("unhandledRejection", rejectionHandler);
     process.off("exit", syncCleanup);
   };
 

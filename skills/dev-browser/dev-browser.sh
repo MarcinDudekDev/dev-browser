@@ -19,8 +19,9 @@ LIB_DIR="$DEV_BROWSER_DIR/lib"
 # Source common functions
 source "$LIB_DIR/common.sh"
 
-# Handle global flags: --cachebust, -p/--page
+# Handle global flags: --cachebust, -p/--page, --quiet-console
 CACHEBUST_FLAG=0
+QUIET_CONSOLE=0
 PAGE_NAME="main"  # Default page name
 NEW_ARGS=()
 while [[ $# -gt 0 ]]; do
@@ -33,6 +34,10 @@ while [[ $# -gt 0 ]]; do
             PAGE_NAME="$2"
             shift 2
             ;;
+        --quiet-console|-q)
+            QUIET_CONSOLE=1
+            shift
+            ;;
         *)
             NEW_ARGS+=("$1")
             shift
@@ -41,6 +46,7 @@ while [[ $# -gt 0 ]]; do
 done
 [[ $CACHEBUST_FLAG -eq 1 ]] && export CACHEBUST=1
 export PAGE_NAME
+export QUIET_CONSOLE
 set -- "${NEW_ARGS[@]}"
 
 # Dispatch commands

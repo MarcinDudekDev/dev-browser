@@ -107,6 +107,15 @@ const page = await client.page("${PAGE_NAME:-main}");
 // User script starts here
 ${SCRIPT}
 
+// Auto-print console errors (unless --quiet-console/-q flag)
+if ("${QUIET_CONSOLE:-0}" !== "1") {
+    const errors = __consoleMessages.filter(m => m.type === 'error');
+    if (errors.length > 0) {
+        console.log("\\n=== CONSOLE ERRORS (" + errors.length + ") ===");
+        errors.forEach(e => console.log("[ERROR]", e.text));
+    }
+}
+
 // Auto-disconnect (injected by wrapper)
 await client.disconnect();
 ENDOFSCRIPT

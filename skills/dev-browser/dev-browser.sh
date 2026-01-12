@@ -2,7 +2,9 @@
 # Dev-browser wrapper - modular version
 # Usage: dev-browser.sh [options] [script.ts]
 #
+# Modes:      --dev (default) | --stealth (anti-fingerprint) | --user (main browser)
 # Server:     --server | --stop | --status
+# Quick:      goto <url> | click <text|ref> | fill <ref> <text> | text <ref> | aria
 # Screenshots: --screenshot | --snap | --diff | --baselines | --responsive | --resize
 # Inspect:    --inspect | --page-status | --console
 # Scripts:    --run <name> | --chain "cmd|cmd" | --list | --scenario | --scenarios
@@ -19,10 +21,11 @@ LIB_DIR="$DEV_BROWSER_DIR/lib"
 # Source common functions
 source "$LIB_DIR/common.sh"
 
-# Handle global flags: --cachebust, -p/--page, --quiet-console
+# Handle global flags: --cachebust, -p/--page, --quiet-console, --stealth, --user
 CACHEBUST_FLAG=0
 QUIET_CONSOLE=0
 PAGE_NAME="main"  # Default page name
+BROWSER_MODE="dev"  # dev (default), stealth, user
 NEW_ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -38,6 +41,18 @@ while [[ $# -gt 0 ]]; do
             QUIET_CONSOLE=1
             shift
             ;;
+        --stealth)
+            BROWSER_MODE="stealth"
+            shift
+            ;;
+        --user)
+            BROWSER_MODE="user"
+            shift
+            ;;
+        --dev)
+            BROWSER_MODE="dev"
+            shift
+            ;;
         *)
             NEW_ARGS+=("$1")
             shift
@@ -47,6 +62,7 @@ done
 [[ $CACHEBUST_FLAG -eq 1 ]] && export CACHEBUST=1
 export PAGE_NAME
 export QUIET_CONSOLE
+export BROWSER_MODE
 set -- "${NEW_ARGS[@]}"
 
 # Dispatch commands

@@ -113,55 +113,138 @@ function fixChromePreferences(userDataDir: string): void {
   }
 }
 
+// Stealth script to mask automation indicators
+const STEALTH_SCRIPT = `
+  // Mask webdriver property
+  Object.defineProperty(navigator, 'webdriver', {
+    get: () => undefined,
+  });
+
+  // Mask automation-controlled property
+  delete window.cdc_adoQpoasnfa76pfcZLmcfl_Array;
+  delete document.$cdc_asdjflasutopfhvcZLmcfl_;
+
+  // Fix permissions API (headless detection)
+  const originalQuery = window.navigator.permissions.query;
+  window.navigator.permissions.query = (parameters) => (
+    parameters.name === 'notifications' ?
+      Promise.resolve({ state: Notification.permission }) :
+      originalQuery(parameters)
+  );
+
+  // Add plugins (headless has 0)
+  Object.defineProperty(navigator, 'plugins', {
+    get: () => [1, 2, 3, 4, 5],
+  });
+
+  // Fix chrome runtime (missing in automation)
+  if (!window.chrome) window.chrome = {};
+  if (!window.chrome.runtime) window.chrome.runtime = {};
+`;
+
 export async function serve(options: ServeOptions = {}): Promise<DevBrowserServer> {
   const port = options.port ?? 9222;
   const headless = options.headless ?? false;
   const cdpPort = options.cdpPort ?? 9223;
   const profileDir = options.profileDir;
+  const browserMode = options.browserMode ?? "dev";
+  const userCdpPort = options.userCdpPort ?? 9222; // Default user Chrome CDP port
+
+  console.log(`Browser mode: ${browserMode}`);
 
   // Validate port numbers
   if (port < 1 || port > 65535) {
     throw new Error(`Invalid port: ${port}. Must be between 1 and 65535`);
   }
-  if (cdpPort < 1 || cdpPort > 65535) {
+  if (browserMode !== "user" && (cdpPort < 1 || cdpPort > 65535)) {
     throw new Error(`Invalid cdpPort: ${cdpPort}. Must be between 1 and 65535`);
   }
-  if (port === cdpPort) {
+  if (browserMode !== "user" && port === cdpPort) {
     throw new Error("port and cdpPort must be different");
   }
 
-  // Determine user data directory for persistent context
-  const userDataDir = profileDir
-    ? join(profileDir, "browser-data")
-    : join(process.cwd(), ".browser-data");
+  let context: BrowserContext;
+  let wsEndpoint: string;
+  let browser: Awaited<ReturnType<typeof chromium.connectOverCDP>> | null = null;
 
-  // Create directory if it doesn't exist
-  mkdirSync(userDataDir, { recursive: true });
-  console.log(`Using persistent browser profile: ${userDataDir}`);
+  if (browserMode === "user") {
+    // USER MODE: Connect to user's existing Chrome browser
+    console.log(`Connecting to user's Chrome on CDP port ${userCdpPort}...`);
+    console.log("(Make sure Chrome is running with: --remote-debugging-port=9222)");
 
-  // Fix Chrome preferences BEFORE launch to prevent crash dialog
-  fixChromePreferences(userDataDir);
+    try {
+      const cdpResponse = await fetchWithRetry(`http://127.0.0.1:${userCdpPort}/json/version`);
+      const cdpInfo = (await cdpResponse.json()) as { webSocketDebuggerUrl: string };
+      wsEndpoint = cdpInfo.webSocketDebuggerUrl;
 
-  console.log("Launching browser with persistent context...");
+      browser = await chromium.connectOverCDP(wsEndpoint);
+      const contexts = browser.contexts();
+      if (contexts.length === 0) {
+        throw new Error("No browser context found. Is Chrome running?");
+      }
+      context = contexts[0];
+      console.log(`Connected to user's Chrome (${contexts.length} context(s))`);
+    } catch (err) {
+      console.error("\n=== USER MODE SETUP REQUIRED ===");
+      console.error("To use --user mode, start Chrome with remote debugging:");
+      console.error("");
+      console.error("  macOS:");
+      console.error("    /Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome --remote-debugging-port=9222");
+      console.error("");
+      console.error("  Or add to Chrome shortcut/alias");
+      console.error("================================\n");
+      throw err;
+    }
+  } else {
+    // DEV or STEALTH MODE: Launch persistent context
+    const userDataDir = profileDir
+      ? join(profileDir, "browser-data")
+      : join(process.cwd(), ".browser-data");
 
-  // Launch persistent context - this persists cookies, localStorage, cache, etc.
-  const context: BrowserContext = await chromium.launchPersistentContext(userDataDir, {
-    headless,
-    args: [
-      `--remote-debugging-port=${cdpPort}`,
-      // Auto-restore sessions after crash (no dialog)
-      "--restore-last-session",
-      // Disable crash recovery bubble (auto-restore instead)
-      "--disable-session-crashed-bubble",
-    ],
-  });
-  console.log("Browser launched with persistent profile...");
+    mkdirSync(userDataDir, { recursive: true });
+    console.log(`Using persistent browser profile: ${userDataDir}`);
 
-  // Get the CDP WebSocket endpoint from Chrome's JSON API (with retry for slow startup)
-  const cdpResponse = await fetchWithRetry(`http://127.0.0.1:${cdpPort}/json/version`);
-  const cdpInfo = (await cdpResponse.json()) as { webSocketDebuggerUrl: string };
-  const wsEndpoint = cdpInfo.webSocketDebuggerUrl;
+    fixChromePreferences(userDataDir);
+
+    console.log("Launching browser with persistent context...");
+
+    context = await chromium.launchPersistentContext(userDataDir, {
+      headless,
+      args: [
+        `--remote-debugging-port=${cdpPort}`,
+        "--restore-last-session",
+        "--disable-session-crashed-bubble",
+        // Additional stealth args
+        ...(browserMode === "stealth" ? [
+          "--disable-blink-features=AutomationControlled",
+        ] : []),
+      ],
+    });
+    console.log("Browser launched with persistent profile...");
+
+    const cdpResponse = await fetchWithRetry(`http://127.0.0.1:${cdpPort}/json/version`);
+    const cdpInfo = (await cdpResponse.json()) as { webSocketDebuggerUrl: string };
+    wsEndpoint = cdpInfo.webSocketDebuggerUrl;
+  }
+
   console.log(`CDP WebSocket endpoint: ${wsEndpoint}`);
+
+  // Helper to inject stealth scripts (for stealth mode)
+  async function injectStealthScripts(page: Page): Promise<void> {
+    if (browserMode !== "stealth") return;
+
+    try {
+      const cdpSession = await context.newCDPSession(page);
+      await cdpSession.send("Page.addScriptToEvaluateOnNewDocument", {
+        source: STEALTH_SCRIPT,
+      });
+      // Also inject on current page
+      await page.evaluate(STEALTH_SCRIPT);
+      await cdpSession.detach();
+    } catch (err) {
+      console.warn("Failed to inject stealth scripts:", err);
+    }
+  }
 
   // Registry entry type for page tracking
   interface PageEntry {
@@ -231,6 +314,10 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     if (!entry) {
       // Create new page in the persistent context (with timeout to prevent hangs)
       const page = await withTimeout(context.newPage(), 30000, "Page creation timed out after 30s");
+
+      // Inject stealth scripts for stealth mode
+      await injectStealthScripts(page);
+
       const targetId = await getTargetId(page);
       entry = { page, targetId };
       registry.set(name, entry);
@@ -298,11 +385,22 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     }
     registry.clear();
 
-    // Close context (this also closes the browser)
-    try {
-      await context.close();
-    } catch {
-      // Context might already be closed
+    // Close context (this also closes the browser) - but NOT in user mode
+    if (browserMode !== "user") {
+      try {
+        await context.close();
+      } catch {
+        // Context might already be closed
+      }
+    } else {
+      // In user mode, just disconnect from browser (don't close it)
+      if (browser) {
+        try {
+          await browser.close();
+        } catch {
+          // Browser connection might already be closed
+        }
+      }
     }
 
     server.close();

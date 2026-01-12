@@ -154,6 +154,8 @@ if (previousSession?.crashedAt) {
 
 console.log("Starting dev browser server...");
 const headless = process.env.HEADLESS === "true";
+const browserMode = (process.env.BROWSER_MODE || "dev") as "dev" | "stealth" | "user";
+console.log(`Browser mode: ${browserMode}`);
 let server: Awaited<ReturnType<typeof serve>>;
 
 try {
@@ -161,6 +163,7 @@ try {
     port: 9222,
     headless,
     profileDir,
+    browserMode,
   });
 } catch (err) {
   logCrash(`Server failed to start: ${err}`);

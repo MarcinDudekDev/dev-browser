@@ -21,4 +21,6 @@ npm install
 
 echo "Starting dev-browser server..."
 export HEADLESS=$HEADLESS
+export BROWSER_MODE=${BROWSER_MODE:-dev}
+echo "Browser mode: $BROWSER_MODE"
 npx tsx scripts/start-server.ts

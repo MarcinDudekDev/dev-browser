@@ -28,19 +28,45 @@ if (isRef) {
         process.exit(1);
     }
 } else {
-    // Try as text first, then as selector
+    // Try as text first, then as selector - search all frames
     let clickedType = "";
+    let clicked = false;
+
+    // Try main page first
     try {
-        await page.getByRole("button", { name: target }).click();
+        await page.getByRole("button", { name: target }).click({ timeout: 3000 });
         clickedType = "button";
+        clicked = true;
     } catch {
         try {
-            await page.getByRole("link", { name: target }).click();
+            await page.getByRole("link", { name: target }).click({ timeout: 3000 });
             clickedType = "link";
-        } catch {
-            await page.locator(target).first().click();
-            clickedType = "selector";
+            clicked = true;
+        } catch {}
+    }
+
+    // If not found, search all frames
+    if (!clicked) {
+        for (const frame of page.frames()) {
+            if (clicked) break;
+            try {
+                await frame.getByRole("button", { name: target }).click({ timeout: 2000 });
+                clickedType = "button (frame)";
+                clicked = true;
+            } catch {
+                try {
+                    await frame.getByRole("link", { name: target }).click({ timeout: 2000 });
+                    clickedType = "link (frame)";
+                    clicked = true;
+                } catch {}
+            }
         }
+    }
+
+    // Last resort: selector on main page
+    if (!clicked) {
+        await page.locator(target).first().click();
+        clickedType = "selector";
     }
     await waitForPageLoad(page);
     // Compact output

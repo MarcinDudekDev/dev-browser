@@ -54,7 +54,8 @@ start_server() {
     log_debug "Starting server from $DEV_BROWSER_DIR"
     cd "$DEV_BROWSER_DIR" || exit 1
 
-    nohup ./server.sh > "$SERVER_LOG" 2>&1 &
+    # Pass browser mode to server
+    nohup env BROWSER_MODE="${BROWSER_MODE:-dev}" ./server.sh > "$SERVER_LOG" 2>&1 &
     local pid=$!
     echo $pid > "$SERVER_PID_FILE"
     log_debug "Server started with PID $pid"

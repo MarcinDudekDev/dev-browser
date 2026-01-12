@@ -132,6 +132,17 @@ case "$1" in
         head -10 "$0" | tail -8
         exit 0
         ;;
+
+    # Quick browsing commands (no --run prefix, agent-browser style)
+    goto|click|text|fill|aria)
+        source "$LIB_DIR/server.sh"
+        source "$LIB_DIR/runscript.sh"
+        start_server || exit 1
+        export SCRIPT_ARGS="${*:2}"
+        export PROJECT_PREFIX=$(get_project_prefix)
+        run_script "$BUILTIN_SCRIPTS_DIR/$1.ts"
+        exit $?
+        ;;
 esac
 
 # Default: run script

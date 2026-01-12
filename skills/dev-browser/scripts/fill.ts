@@ -44,26 +44,43 @@ if (isRef) {
         process.exit(1);
     }
 } else {
-    // Try by name, id, label, placeholder
-    const selectors = [
-        `[name="${target}"]`,
-        `#${target}`,
-        `[placeholder*="${target}" i]`,
-    ];
+    // Check if target looks like a CSS selector (contains [ ] # . or starts with tag name)
+    const looksLikeSelector = /^[a-z]+\[|^\[|^#|^\./.test(target);
 
     let filled = false;
     let filledWith = "";
 
-    for (const sel of selectors) {
+    if (looksLikeSelector) {
+        // Use target directly as CSS selector
         try {
-            const el = page.locator(sel).first();
+            const el = page.locator(target).first();
             if (await el.count() > 0) {
                 await el.fill(value);
-                filledWith = sel;
+                filledWith = target;
                 filled = true;
-                break;
             }
         } catch {}
+    }
+
+    if (!filled) {
+        // Try by name, id, label, placeholder
+        const selectors = [
+            `[name="${target}"]`,
+            `#${target}`,
+            `[placeholder*="${target}" i]`,
+        ];
+
+        for (const sel of selectors) {
+            try {
+                const el = page.locator(sel).first();
+                if (await el.count() > 0) {
+                    await el.fill(value);
+                    filledWith = sel;
+                    filled = true;
+                    break;
+                }
+            } catch {}
+        }
     }
 
     if (!filled) {

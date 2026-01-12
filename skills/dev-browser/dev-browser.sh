@@ -25,7 +25,7 @@ source "$LIB_DIR/common.sh"
 CACHEBUST_FLAG=0
 QUIET_CONSOLE=0
 PAGE_NAME="main"  # Default page name
-BROWSER_MODE="dev"  # dev (default), stealth, user
+BROWSER_MODE=""  # empty = use current server mode, or dev if starting fresh
 NEW_ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in

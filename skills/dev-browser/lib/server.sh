@@ -35,11 +35,24 @@ if closed > 0:
 
 start_server() {
     log_debug "start_server called from $(pwd)"
+    local mode_file="$SKILL_TMP_DIR/browser_mode"
+    local current_mode="dev"
+    [[ -f "$mode_file" ]] && current_mode=$(cat "$mode_file")
+
+    # If no mode specified, use current mode (or dev if starting fresh)
+    local requested_mode="${BROWSER_MODE:-$current_mode}"
 
     if check_server_health; then
-        log_debug "Server already healthy"
-        cleanup_orphaned_tabs
-        return 0
+        # Check if running server's mode matches requested mode
+        if [[ "$current_mode" != "$requested_mode" ]]; then
+            echo "Mode change: $current_mode -> $requested_mode, restarting server..." >&2
+            stop_server
+            sleep 1
+        else
+            log_debug "Server already healthy in $current_mode mode"
+            cleanup_orphaned_tabs
+            return 0
+        fi
     fi
 
     # Port responds but wsEndpoint missing = zombie state
@@ -50,12 +63,15 @@ start_server() {
         sleep 1
     fi
 
-    echo "Starting dev-browser server..." >&2
+    echo "Starting dev-browser server (mode: $requested_mode)..." >&2
     log_debug "Starting server from $DEV_BROWSER_DIR"
     cd "$DEV_BROWSER_DIR" || exit 1
 
+    # Save requested mode for future checks
+    echo "$requested_mode" > "$mode_file"
+
     # Pass browser mode to server
-    nohup env BROWSER_MODE="${BROWSER_MODE:-dev}" ./server.sh > "$SERVER_LOG" 2>&1 &
+    nohup env BROWSER_MODE="$requested_mode" ./server.sh > "$SERVER_LOG" 2>&1 &
     local pid=$!
     echo $pid > "$SERVER_PID_FILE"
     log_debug "Server started with PID $pid"
@@ -107,6 +123,14 @@ stop_server() {
 
 server_status() {
     echo "=== DEV-BROWSER STATUS ==="
+
+    # Show current mode
+    local mode_file="$SKILL_TMP_DIR/browser_mode"
+    if [[ -f "$mode_file" ]]; then
+        echo "Mode: $(cat "$mode_file")"
+    else
+        echo "Mode: dev (default)"
+    fi
 
     if [[ -f "$SERVER_PID_FILE" ]]; then
         local pid=$(cat "$SERVER_PID_FILE")

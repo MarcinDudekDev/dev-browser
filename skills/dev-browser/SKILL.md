@@ -4,54 +4,130 @@ description: Browser automation with persistent page state for navigating sites,
 domain: browser
 type: plugin
 frequency: daily
-commands: [--run, --snap, --screenshot, --inspect]
+commands: [goto, click, fill, text, aria, --screenshot, --inspect, --stealth, --user, --styles, --element, --annotate, --watch-design, --console-snapshot, --responsive, --resize, --baselines, --wplogin, --list, --scenarios, --debug, --crashes, --tabs, --cleanup]
 tools: [~/Tools/dev-browser.sh]
 ---
 
-# Dev Browser Skill
+# Dev Browser Skill (v1.4.0)
 
-Browser automation that maintains page state across script executions. Write small, focused scripts to accomplish tasks incrementally.
+Browser automation that maintains page state across script executions. Multi-server architecture supports running dev, stealth, and user modes simultaneously.
 
-## Getting Started
+## Table of Contents
+- [Quick Start](#quick-start)
+- [Browser Modes](#browser-modes)
+- [CLI Commands](#full-usage)
+- [TypeScript Scripts](#writing-scripts)
+- [YAML Scenarios](#yaml-scenarios)
+- [Wait Patterns](#waiting)
+- [Multi-Server Modes](#multi-server-architecture)
+- [Debugging](#debugging-tips)
 
-**ALWAYS use `~/Tools/dev-browser.sh` wrapper** - auto-imports helpers, prefixes page names, resizes screenshots, manages server.
-
-### Installation
+## Quick Start
 
 ```bash
-cd skills/dev-browser && ./install.sh
+# Quick commands (preferred - no --run prefix needed)
+dev-browser.sh goto https://example.com    # Navigate + inspect
+dev-browser.sh click "Submit"              # Click by text/ref
+dev-browser.sh fill email test@example.com # Fill form field
+dev-browser.sh text e5                     # Get text from ref
+dev-browser.sh aria                        # Get ARIA snapshot with refs
+
+# Stealth mode (bypasses bot detection)
+dev-browser.sh --stealth goto https://allegro.pl
+
+# Screenshots (path is in OUTPUT - don't pass it!)
+dev-browser.sh --screenshot main
+dev-browser.sh --screenshot main myshot.png  # optional filename
 ```
 
-### Usage
+## Browser Modes
+
+| Mode | Flag | Port | Use Case |
+|------|------|------|----------|
+| dev | `--dev` (default) | 9222 | Normal testing |
+| stealth | `--stealth` | 9224 | Anti-fingerprint (bypasses CAPTCHAs) |
+| user | `--user` | 9226 | Your real browser session |
+
+**Multi-server:** Each mode runs independently - start all three if needed!
 
 ```bash
-# Built-in commands
-~/Tools/dev-browser.sh --run goto https://example.com  # Navigate + auto-inspect (forms, buttons, links)
-~/Tools/dev-browser.sh --run click "Submit"
-~/Tools/dev-browser.sh --run links          # Get all links from current page (50 max)
-~/Tools/dev-browser.sh --run links all      # Get ALL links (no limit)
-~/Tools/dev-browser.sh --screenshot main
-~/Tools/dev-browser.sh --inspect main       # Detailed inspection + ARIA snapshot
+# Server management
+dev-browser.sh --server              # Start dev server
+dev-browser.sh --stealth --server    # Start stealth server
+dev-browser.sh --status              # Show all servers
+dev-browser.sh --stop                # Stop current mode
+dev-browser.sh --stop --all          # Stop all servers
 
-# Custom scripts: ~/Tools/dev-browser-scripts/{project}/script.ts
-~/Tools/dev-browser.sh --run myproject/login
-
-# YAML scenarios: Declarative flows
-~/Tools/dev-browser.sh --scenario wp-login
-~/Tools/dev-browser.sh --scenarios  # List available
+# Brave/Chrome setup for --user mode
+dev-browser.sh --setup-brave         # Shows setup instructions
 ```
 
-#### Global Flags
+## Global Flags
 
-- `-p PAGE` / `--page PAGE` - Target page name (default: "main"). Use to work with different browser tabs.
-- `--cachebust` - Add cache-busting query param (`?v=timestamp`) to URLs for bypassing browser cache
+- `--dev` / `--stealth` / `--user` - Select browser mode
+- `-p PAGE` / `--page PAGE` - Target page name (default: "main")
+- `--cachebust` - Add cache-busting query param
+- `-q` / `--quiet-console` - Suppress console error output
 
-Examples:
 ```bash
-~/Tools/dev-browser.sh --run myscript.ts                # Uses page "main" (default)
-~/Tools/dev-browser.sh -p admin --run myscript.ts       # Uses page "admin"
-~/Tools/dev-browser.sh -p checkout --chain "goto ..."   # Uses page "checkout"
-~/Tools/dev-browser.sh --cachebust --run goto https://example.com
+dev-browser.sh --stealth -p checkout goto https://shop.com
+dev-browser.sh --cachebust goto https://example.com
+```
+
+**⚠️ DO NOT add `2>&1`** - dev-browser handles stdout/stderr correctly. Just run commands directly:
+```bash
+# Correct
+dev-browser.sh goto https://example.com
+
+# Wrong - unnecessary stderr redirect
+dev-browser.sh goto https://example.com 2>&1
+```
+
+## Full Usage
+
+```bash
+# Quick commands
+dev-browser.sh goto <url>            # Navigate + auto-inspect
+dev-browser.sh click <text|ref>      # Click button/link
+dev-browser.sh fill <field> <value>  # Fill input by name/ref/label
+dev-browser.sh text <ref>            # Get element text
+dev-browser.sh aria                  # ARIA snapshot with refs
+
+# Scripts
+dev-browser.sh --run myproject/login # Run custom script
+dev-browser.sh --scenario wp-login   # Run YAML scenario
+dev-browser.sh --chain "goto url|click Submit"
+
+# Inspection
+dev-browser.sh --screenshot main     # Take screenshot
+dev-browser.sh --inspect main        # Forms + ARIA snapshot
+dev-browser.sh --page-status main    # URL, title, state
+dev-browser.sh --console main        # Watch console (Ctrl+C to stop)
+dev-browser.sh --console-snapshot main  # Get existing console messages
+dev-browser.sh --styles '.btn' main  # CSS cascade inspector for selector
+dev-browser.sh --element '#submit'   # Full element inspection (attrs, xpath, box model, events)
+dev-browser.sh --annotate main       # Screenshot with ref labels + bounding box coords
+dev-browser.sh --watch-design main design.png 5  # Live design comparison (score updates on change)
+dev-browser.sh --tabs                # List all open browser tabs
+
+# Visual diff & responsive
+dev-browser.sh --snap main           # Save baseline
+dev-browser.sh --diff main           # Compare to baseline
+dev-browser.sh --baselines           # List saved visual diff baselines
+dev-browser.sh --responsive main     # Multi-viewport screenshots (mobile/tablet/desktop)
+dev-browser.sh --resize 1280x720     # Resize viewport to specific dimensions
+
+# Scripts & scenarios
+dev-browser.sh --list                # List available user scripts
+dev-browser.sh --scenarios           # List available YAML scenarios
+
+# WordPress
+dev-browser.sh --wplogin https://site.local/wp-admin/  # Auto-login to WordPress
+
+# Diagnostics & cleanup
+dev-browser.sh --debug               # Show diagnostic info
+dev-browser.sh --crashes             # Show browser crash logs
+dev-browser.sh --cleanup             # Cleanup stale resources
 ```
 
 **Script template** (`~/Tools/dev-browser-scripts/myproject/test.ts`):
@@ -94,32 +170,45 @@ console.log(await page.title());
 
 ## Setup
 
-First, start the dev-browser server using the startup script:
+The server auto-starts when you run any command. For manual control:
 
 ```bash
-./skills/dev-browser/server.sh &
+dev-browser.sh --server              # Start dev server (port 9222)
+dev-browser.sh --stealth --server    # Start stealth server (port 9224)
+dev-browser.sh --status              # Check all servers
 ```
 
-The script will automatically install dependencies and start the server. It will also install Chromium on first run if needed.
+### Multi-Server Architecture
 
-### Flags
+Each mode runs on its own port with separate browser profile:
 
-The server script accepts the following flags:
+| Mode | HTTP Port | CDP Port | Profile |
+|------|-----------|----------|---------|
+| dev | 9222 | 9223 | profiles/dev |
+| stealth | 9224 | 9225 | profiles/stealth |
+| user | 9226 | 9222* | Your browser |
 
-- `--headless` - Start the browser in headless mode (no visible browser window). Use if the user asks for it.
+*User mode connects to your browser's debugging port.
 
-**Wait for the `Ready` message before running scripts.** On first run, the server will:
+### User Mode Setup (Brave/Chrome)
 
-- Install dependencies if needed
-- Download and install Playwright Chromium browser
-- Create the `tmp/` directory for scripts
-- Create the `profiles/` directory for browser data persistence
+To use `--user` mode with your real browser:
 
-The first run may take longer while dependencies are installed. Subsequent runs will start faster.
+```bash
+# Option 1: Start browser with debugging
+open -a 'Brave Browser' --args --remote-debugging-port=9222
+# or
+open -a 'Google Chrome' --args --remote-debugging-port=9222
 
-**Important:** Scripts must be run with `npx tsx` (not `npm run`) due to Playwright WebSocket compatibility.
+# Then use
+dev-browser.sh --user goto https://example.com
+```
 
-The server starts a Chromium browser with a REST API for page management (default: `http://localhost:9222`).
+Run `dev-browser.sh --setup-brave` for detailed instructions.
+
+### Server Flags
+
+- `--headless` - No visible browser window
 
 ## How It Works
 
@@ -314,11 +403,25 @@ await new Promise(r => setTimeout(r, 5000)); // TODO: remove - just watching ani
 
 ### Screenshots
 
-Take screenshots when you need to visually inspect the page:
+> **⛔ CRITICAL: Read OUTPUT for the saved path!**
+> ```
+> ❌ WRONG: --screenshot main && Read(...)   # Can't chain!
+> ❌ WRONG: Read("screenshots/main.png")     # Don't guess!
+> ✅ RIGHT: Run command, use path from OUTPUT
+> ```
 
+**Via CLI:**
+```bash
+~/Tools/dev-browser.sh --screenshot main
+~/Tools/dev-browser.sh --screenshot main myshot.png  # optional filename
+# Output: Screenshot saved: /Users/.../screenshots/myshot.png
+#         USE THIS PATH from the output!
+```
+
+**Via script:**
 ```typescript
-await page.screenshot({ path: "tmp/screenshot.png" });
-await page.screenshot({ path: "tmp/full.png", fullPage: true });
+await page.screenshot({ filename: "screenshot.png" });
+await page.screenshot({ filename: "full.png", fullPage: true });
 ```
 
 ### ARIA Snapshot (Element Discovery)
@@ -394,7 +497,7 @@ If a script fails, the page state is preserved. You can:
 Or write a debug script (`~/Tools/dev-browser-scripts/{project}/debug.ts`):
 ```typescript
 // client and page auto-injected
-await page.screenshot({ path: "/tmp/debug.png" });
+await page.screenshot({ filename: "debug.png" });
 console.log({
   url: page.url(),
   title: await page.title(),

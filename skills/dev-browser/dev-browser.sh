@@ -32,7 +32,7 @@
 #
 # Modes:      --dev (default) | --stealth (anti-fingerprint) | --user (main browser)
 # Server:     --server | --stop [--all] | --status (multi-server: each mode runs independently)
-# Quick:      goto <url> | click <text|ref> | fill <ref> <text> | select <ref> <value> | text <ref> | aria
+# Quick:      goto <url> | click <ref> | jsclick <ref> | fill <ref> <text> | select <ref> <value> | text <ref> | aria
 # Screenshots: --screenshot | --snap | --diff | --baselines | --responsive | --resize
 # Inspect:    --inspect | --page-status | --console | --console-snapshot | --styles | --element | --annotate | --watch-design
 # Scripts:    --run <name> | --chain "cmd|cmd" | --list | --scenario | --scenarios
@@ -189,7 +189,7 @@ case "$1" in
         ;;
 
     # Quick browsing commands (no --run prefix, agent-browser style)
-    goto|click|text|fill|select|aria)
+    goto|click|jsclick|text|fill|select|aria)
         source "$LIB_DIR/server.sh"
         source "$LIB_DIR/runscript.sh"
         start_server || exit 1

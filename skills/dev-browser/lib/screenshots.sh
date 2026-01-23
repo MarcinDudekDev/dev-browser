@@ -4,16 +4,21 @@
 cmd_screenshot() {
     local page_name="${1:-main}"
     get_project_paths
-    local screenshot_path="${2:-$PROJECT_SCREENSHOTS_DIR/screenshot-$(date +%s).png}"
+    local filename=$(basename "${2:-screenshot-$(date +%s).png}")
+    local screenshot_path="$PROJECT_SCREENSHOTS_DIR/$filename"
     start_server || return 1
     local PREFIX=$(get_project_prefix)
-    mkdir -p "$(dirname "$screenshot_path")"
+    mkdir -p "$PROJECT_SCREENSHOTS_DIR"
 
     cd "$DEV_BROWSER_DIR" && ./node_modules/.bin/tsx <<SCREENSHOT_SCRIPT
 import { connect } from "@/client.js";
 const client = await connect();
-const pageName = "${PREFIX}-${page_name}";
 const pages = await client.list();
+// Try prefixed name first, then raw name for cross-project access
+let pageName = "${PREFIX}-${page_name}";
+if (!pages.includes(pageName) && pages.includes("${page_name}")) {
+    pageName = "${page_name}";
+}
 if (!pages.includes(pageName)) {
     console.error("Page '${page_name}' not found (full name: " + pageName + ")");
     console.error("Available pages:");
@@ -49,8 +54,11 @@ const breakpoints = [
 ];
 
 const client = await connect();
-const pageName = "${PREFIX}-${page_name}";
 const pages = await client.list();
+let pageName = "${PREFIX}-${page_name}";
+if (!pages.includes(pageName) && pages.includes("${page_name}")) {
+    pageName = "${page_name}";
+}
 if (!pages.includes(pageName)) {
     console.error("Page '${page_name}' not found");
     console.error("Available pages:", pages.join(", "));
@@ -101,8 +109,11 @@ cmd_resize() {
     cd "$DEV_BROWSER_DIR" && ./node_modules/.bin/tsx <<RESIZE_SCRIPT
 import { connect } from "@/client.js";
 const client = await connect();
-const pageName = "${PREFIX}-${page_name}";
 const pages = await client.list();
+let pageName = "${PREFIX}-${page_name}";
+if (!pages.includes(pageName) && pages.includes("${page_name}")) {
+    pageName = "${page_name}";
+}
 if (!pages.includes(pageName)) {
     console.error("Page '${page_name}' not found");
     console.error("Available pages:", pages.join(", "));

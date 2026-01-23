@@ -13,11 +13,17 @@ if (!target) {
 const isRef = /^e\d+$/.test(target);
 
 async function jsClickElement(el: any) {
-    // Get element handle and execute native click in browser context
-    const handle = await el.elementHandle();
-    if (!handle) {
-        throw new Error("Could not get element handle");
+    // el may be an ElementHandle (from selectSnapshotRef) or a Locator (from page.locator)
+    // ElementHandles have evaluate() directly, Locators have elementHandle() method
+    let handle = el;
+    if (typeof el.elementHandle === 'function') {
+        // It's a Locator - get the ElementHandle
+        handle = await el.elementHandle();
+        if (!handle) {
+            throw new Error("Could not get element handle from locator");
+        }
     }
+    // Now handle is an ElementHandle - use evaluate directly
     await handle.evaluate((node: HTMLElement) => {
         // Dispatch both click and mousedown/mouseup for maximum compatibility
         node.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));

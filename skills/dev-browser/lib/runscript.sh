@@ -66,6 +66,7 @@ run_script() {
     cat > "$TEMP_SCRIPT" << ENDOFSCRIPT
 // Auto-injected by wrapper.sh
 const __PROJECT_PREFIX = "${PREFIX}";
+const __SERVER_PORT = "${SERVER_PORT}";
 const __pageName = (name: string) => __PROJECT_PREFIX + "-" + name;
 
 // Console message collector
@@ -74,10 +75,20 @@ const __consoleMessages: Array<{type: string, text: string}> = [];
 // Override client.page to auto-prefix and capture console
 const __originalConnect = (await import("@/client.js")).connect;
 const connect = async (url?: string) => {
-    const client = await __originalConnect(url);
+    // Use mode-specific port unless explicitly overridden
+    const serverUrl = url ?? \`http://localhost:\${__SERVER_PORT}\`;
+    const client = await __originalConnect(serverUrl);
     const originalPage = client.page.bind(client);
+    const originalList = client.list.bind(client);
     client.page = async (name: string) => {
-        const page = await originalPage(__pageName(name));
+        // Try prefixed name first, then raw name for cross-project access
+        const prefixedName = __pageName(name);
+        const pages = await originalList();
+        let pageName = prefixedName;
+        if (!pages.includes(prefixedName) && pages.includes(name)) {
+            pageName = name;
+        }
+        const page = await originalPage(pageName);
         // Auto-capture console messages
         page.on('console', (msg: any) => {
             __consoleMessages.push({ type: msg.type(), text: msg.text() });

@@ -1,15 +1,43 @@
 #!/bin/bash
-# Dev-browser wrapper - modular version
+# Dev-browser wrapper - modular version (v1.4.1 - improved timeouts)
 # Usage: dev-browser.sh [options] [script.ts]
 #
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║  ⚠️  SCREENSHOT USAGE - READ THIS FIRST!                                   ║
+# ╠════════════════════════════════════════════════════════════════════════════╣
+# ║  ❌ NEVER pass a path:    --screenshot main /tmp/shot.png                  ║
+# ║  ❌ NEVER chain with &&:  --screenshot main && Read(...)                   ║
+# ║  ❌ NEVER guess paths:    Read("/Users/.../screenshots/main.png")          ║
+# ║                                                                            ║
+# ║  ✅ CORRECT: Run the command, READ THE OUTPUT for the actual path          ║
+# ║     Example: --screenshot main                                             ║
+# ║     Output:  Screenshot saved: /Users/.../screenshot_main_1705123456.png   ║
+# ║     Then:    Use that RETURNED path with Read()                            ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+#
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║  ⚠️  AVOID SLEEP PATTERNS - USE EVENT-BASED WAITING!                       ║
+# ╠════════════════════════════════════════════════════════════════════════════╣
+# ║  ❌ BAD:  sleep 3 && dev-browser.sh click 'Submit'                         ║
+# ║  ❌ BAD:  sleep 5; dev-browser.sh --screenshot main                        ║
+# ║                                                                            ║
+# ║  ✅ GOOD: Use event-based waiting in your scripts:                         ║
+# ║     await waitForElement(page, '.success-message');                        ║
+# ║     await waitForURL(page, /success/);                                     ║
+# ║     await waitForNetworkIdle(page);                                        ║
+# ║     await waitForCondition(page, () => document.querySelector('.done'));   ║
+# ║                                                                            ║
+# ║  Sleep + command chains cause backgrounding and timeout issues.            ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+#
 # Modes:      --dev (default) | --stealth (anti-fingerprint) | --user (main browser)
-# Server:     --server | --stop | --status
-# Quick:      goto <url> | click <text|ref> | fill <ref> <text> | text <ref> | aria
+# Server:     --server | --stop [--all] | --status (multi-server: each mode runs independently)
+# Quick:      goto <url> | click <text|ref> | fill <ref> <text> | select <ref> <value> | text <ref> | aria
 # Screenshots: --screenshot | --snap | --diff | --baselines | --responsive | --resize
-# Inspect:    --inspect | --page-status | --console
+# Inspect:    --inspect | --page-status | --console | --console-snapshot | --styles | --element | --annotate | --watch-design
 # Scripts:    --run <name> | --chain "cmd|cmd" | --list | --scenario | --scenarios
 # Diagnostics: --debug | --crashes | --tabs | --cleanup
-# Other:      --wplogin | --help
+# Other:      --wplogin | --setup-brave | --help
 
 # Resolve script location (follow symlinks)
 SOURCE="${BASH_SOURCE[0]}"
@@ -103,13 +131,18 @@ case "$1" in
         ;;
 
     # Inspect commands
-    --inspect|--page-status|--console)
+    --inspect|--page-status|--console|--console-snapshot|--styles|--element|--annotate|--watch-design)
         source "$LIB_DIR/server.sh"
         source "$LIB_DIR/inspect.sh"
         case "$1" in
             --inspect) cmd_inspect "$2"; exit $? ;;
             --page-status) cmd_page_status "$2"; exit $? ;;
             --console) cmd_console "$2" "$3"; exit $? ;;
+            --console-snapshot) cmd_console_snapshot "$2"; exit $? ;;
+            --styles) cmd_styles "$2" "$3"; exit $? ;;
+            --element) cmd_element "$2" "$3"; exit $? ;;
+            --annotate) cmd_annotate "$2" "$3"; exit $? ;;
+            --watch-design) cmd_watch_design "$2" "$3" "$4"; exit $? ;;
         esac
         ;;
 
@@ -149,8 +182,14 @@ case "$1" in
         exit 0
         ;;
 
+    # Brave setup helper
+    --setup-brave)
+        "$DEV_BROWSER_DIR/scripts/setup-brave-debug.sh"
+        exit $?
+        ;;
+
     # Quick browsing commands (no --run prefix, agent-browser style)
-    goto|click|text|fill|aria)
+    goto|click|text|fill|select|aria)
         source "$LIB_DIR/server.sh"
         source "$LIB_DIR/runscript.sh"
         start_server || exit 1
@@ -160,6 +199,17 @@ case "$1" in
         exit $?
         ;;
 esac
+
+# Detect wrong syntax: URL passed directly without command
+if [[ -n "$1" && "$1" =~ ^https?:// ]]; then
+    echo "ERROR: Wrong syntax - URL passed directly without command" >&2
+    echo "" >&2
+    echo "ALWAYS read tool/skill documentation BEFORE using it!" >&2
+    echo "Run: /dev-browser to see usage" >&2
+    echo "" >&2
+    echo "Example: dev-browser.sh goto $1" >&2
+    exit 1
+fi
 
 # Default: run script
 source "$LIB_DIR/server.sh"

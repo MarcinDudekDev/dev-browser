@@ -9,7 +9,7 @@ cmd_inspect() {
     cd "$DEV_BROWSER_DIR" && ./node_modules/.bin/tsx <<INSPECT_SCRIPT
 import { connect } from "@/client.js";
 
-const client = await connect();
+const client = await connect("http://localhost:${SERVER_PORT}");
 const pages = await client.list();
 let pageName = "${PREFIX}-${page_name}";
 if (!pages.includes(pageName) && pages.includes("${page_name}")) {
@@ -103,7 +103,7 @@ cmd_page_status() {
     cd "$DEV_BROWSER_DIR" && ./node_modules/.bin/tsx <<STATUS_SCRIPT
 import { connect } from "@/client.js";
 
-const client = await connect();
+const client = await connect("http://localhost:${SERVER_PORT}");
 const pages = await client.list();
 let pageName = "${PREFIX}-${page_name}";
 if (!pages.includes(pageName) && pages.includes("${page_name}")) {
@@ -168,7 +168,7 @@ cmd_console() {
     cd "$DEV_BROWSER_DIR" && ./node_modules/.bin/tsx <<CONSOLE_SCRIPT
 import { connect } from "@/client.js";
 
-const client = await connect();
+const client = await connect("http://localhost:${SERVER_PORT}");
 const pages = await client.list();
 let pageName = "${PREFIX}-${page_name}";
 if (!pages.includes(pageName) && pages.includes("${page_name}")) {
@@ -310,7 +310,7 @@ cmd_styles() {
     cd "$DEV_BROWSER_DIR" && ./node_modules/.bin/tsx <<STYLES_SCRIPT
 import { connect } from "@/client.js";
 
-const client = await connect();
+const client = await connect("http://localhost:${SERVER_PORT}");
 const pages = await client.list();
 let pageName = "${PREFIX}-${page_name}";
 if (!pages.includes(pageName) && pages.includes("${page_name}")) {
@@ -518,7 +518,7 @@ cmd_element() {
     cd "$DEV_BROWSER_DIR" && ./node_modules/.bin/tsx <<ELEMENT_SCRIPT
 import { connect } from "@/client.js";
 
-const client = await connect();
+const client = await connect("http://localhost:${SERVER_PORT}");
 const pages = await client.list();
 let pageName = "${PREFIX}-${page_name}";
 if (!pages.includes(pageName) && pages.includes("${page_name}")) {
@@ -1013,7 +1013,7 @@ import { connect } from "@/client.js";
 import * as fs from "fs";
 import * as path from "path";
 
-const client = await connect();
+const client = await connect("http://localhost:${SERVER_PORT}");
 const pages = await client.list();
 let pageName = "${PREFIX}-${page_name}";
 if (!pages.includes(pageName) && pages.includes("${page_name}")) {
@@ -1258,7 +1258,7 @@ const interval = ${interval} * 1000;
 const designCompare = "${DESIGN_COMPARE}";
 
 // Connect ONCE to the persistent dev-browser server
-const client = await connect();
+const client = await connect("http://localhost:${SERVER_PORT}");
 
 const pages = await client.list();
 let pageName = "${PREFIX}-${page_name}";

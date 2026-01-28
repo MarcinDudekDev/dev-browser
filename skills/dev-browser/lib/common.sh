@@ -7,10 +7,47 @@ mkdir -p "$SKILL_TMP_DIR"
 
 # Config
 MAX_SCREENSHOT_DIM=7500
-SERVER_PID_FILE="$SKILL_TMP_DIR/server.pid"
-SERVER_LOG="$SKILL_TMP_DIR/server.log"
 DEBUG_LOG="$SKILL_TMP_DIR/debug.log"
-SERVER_PORT=9222
+
+# Multi-server port configuration (each mode gets its own server)
+# Format: HTTP_PORT / CDP_PORT
+#   dev:     9222 / 9223
+#   stealth: 9224 / 9225
+#   user:    9226 / (user's Chrome CDP, typically 9222)
+get_mode_ports() {
+    local mode="${1:-dev}"
+    case "$mode" in
+        dev)     echo "9222 9223" ;;
+        stealth) echo "9224 9225" ;;
+        user)    echo "9226 9222" ;;  # HTTP 9226, connects to user's Chrome on 9222
+        *)       echo "9222 9223" ;;  # default to dev
+    esac
+}
+
+# Get current mode (from env or file)
+get_current_mode() {
+    if [[ -n "$BROWSER_MODE" ]]; then
+        echo "$BROWSER_MODE"
+    elif [[ -f "$SKILL_TMP_DIR/browser_mode" ]]; then
+        cat "$SKILL_TMP_DIR/browser_mode"
+    else
+        echo "dev"
+    fi
+}
+
+# Set mode-specific variables (call this after determining mode)
+set_mode_vars() {
+    local mode="${1:-$(get_current_mode)}"
+    local ports=($(get_mode_ports "$mode"))
+    SERVER_PORT="${ports[0]}"
+    CDP_PORT="${ports[1]}"
+    SERVER_PID_FILE="$SKILL_TMP_DIR/server-${mode}.pid"
+    SERVER_LOG="$SKILL_TMP_DIR/server-${mode}.log"
+    export SERVER_PORT CDP_PORT SERVER_PID_FILE SERVER_LOG
+}
+
+# Initialize with default mode (will be overridden when mode is known)
+set_mode_vars "dev"
 SCREENSHOTS_DIR="${SCREENSHOTS_DIR:-$HOME/Tools/screenshots}"
 BUILTIN_SCRIPTS_DIR="$DEV_BROWSER_DIR/scripts"
 USER_SCRIPTS_DIR="$HOME/Tools/dev-browser-scripts"

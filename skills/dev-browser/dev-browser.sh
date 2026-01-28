@@ -90,7 +90,13 @@ done
 [[ $CACHEBUST_FLAG -eq 1 ]] && export CACHEBUST=1
 export PAGE_NAME
 export QUIET_CONSOLE
+# Persist mode so subsequent commands (screenshot, inspect) use the same server
+if [[ -n "$BROWSER_MODE" ]]; then
+    echo "$BROWSER_MODE" > "$SKILL_TMP_DIR/browser_mode"
+fi
 export BROWSER_MODE
+# Re-initialize mode vars with current mode (env or persisted file)
+set_mode_vars "$(get_current_mode)"
 set -- "${NEW_ARGS[@]}"
 
 # Dispatch commands
@@ -100,7 +106,7 @@ case "$1" in
         source "$LIB_DIR/server.sh"
         case "$1" in
             --server) start_server; exit $? ;;
-            --stop) stop_server; exit 0 ;;
+            --stop) stop_server "$2"; exit 0 ;;
             --status) server_status; exit 0 ;;
         esac
         ;;
@@ -121,7 +127,21 @@ case "$1" in
         source "$LIB_DIR/server.sh"
         source "$LIB_DIR/screenshots.sh"
         case "$1" in
-            --screenshot) cmd_screenshot "$2" "$3"; exit $? ;;
+            --screenshot)
+                # Use server-side screenshot (server's Page object, avoids stale CDP)
+                start_server || exit 1
+                get_project_paths
+                export SCREENSHOTS_DIR="$PROJECT_SCREENSHOTS_DIR"
+                export PROJECT_PREFIX=$(get_project_prefix)
+                [[ -n "$2" ]] && PAGE_NAME="$2" && export PAGE_NAME
+                export SCRIPT_ARGS="${3:-}"
+                export SERVER_PORT
+                cd "$DEV_BROWSER_DIR" && ./node_modules/.bin/tsx "$BUILTIN_SCRIPTS_DIR/screenshot.ts"
+                _exit=$?
+                _latest_shot="$PROJECT_SCREENSHOTS_DIR/$(ls -t "$PROJECT_SCREENSHOTS_DIR" 2>/dev/null | head -1)"
+                [[ -f "$_latest_shot" ]] && resize_screenshot "$_latest_shot" 2>/dev/null
+                exit $_exit
+                ;;
             --snap) "$VISUAL_DIFF" --snap "${2:-main}"; exit $? ;;
             --diff) "$VISUAL_DIFF" --compare "${2:-main}"; exit $? ;;
             --baselines) "$VISUAL_DIFF" --list; exit $? ;;
@@ -189,7 +209,7 @@ case "$1" in
         ;;
 
     # Quick browsing commands (no --run prefix, agent-browser style)
-    goto|click|jsclick|text|fill|select|aria|eval)
+    goto|click|jsclick|text|fill|select|aria|eval|upload|dismiss-consent)
         source "$LIB_DIR/server.sh"
         source "$LIB_DIR/runscript.sh"
         start_server || exit 1

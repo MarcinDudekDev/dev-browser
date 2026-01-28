@@ -12,8 +12,8 @@ if (!args) {
 let target: string;
 let value: string;
 
-if (args.includes("=") && !args.startsWith("e")) {
-    // Legacy format: field=value
+if (args.includes("=") && !args.startsWith("e") && /^[a-zA-Z_][\w-]*=/.test(args)) {
+    // Legacy format: field=value (only for simple field names, not CSS selectors)
     const eqIdx = args.indexOf("=");
     target = args.slice(0, eqIdx);
     value = args.slice(eqIdx + 1);

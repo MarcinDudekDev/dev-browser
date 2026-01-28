@@ -1,7 +1,5 @@
 #!/bin/bash
-# Server management functions
-
-CDP_PORT=9223
+# Server management functions - multi-server support (one per mode)
 
 # Cleanup orphaned about:blank tabs (silent, runs in background)
 cleanup_orphaned_tabs() {
@@ -34,25 +32,16 @@ if closed > 0:
 }
 
 start_server() {
-    log_debug "start_server called from $(pwd)"
-    local mode_file="$SKILL_TMP_DIR/browser_mode"
-    local current_mode="dev"
-    [[ -f "$mode_file" ]] && current_mode=$(cat "$mode_file")
+    # Determine mode and set variables
+    local mode="${BROWSER_MODE:-dev}"
+    set_mode_vars "$mode"
 
-    # If no mode specified, use current mode (or dev if starting fresh)
-    local requested_mode="${BROWSER_MODE:-$current_mode}"
+    log_debug "start_server called for mode=$mode (port=$SERVER_PORT)"
 
     if check_server_health; then
-        # Check if running server's mode matches requested mode
-        if [[ "$current_mode" != "$requested_mode" ]]; then
-            echo "Mode change: $current_mode -> $requested_mode, restarting server..." >&2
-            stop_server
-            sleep 1
-        else
-            log_debug "Server already healthy in $current_mode mode"
-            cleanup_orphaned_tabs
-            return 0
-        fi
+        log_debug "Server already healthy for mode $mode"
+        cleanup_orphaned_tabs
+        return 0
     fi
 
     # Port responds but wsEndpoint missing = zombie state
@@ -63,15 +52,12 @@ start_server() {
         sleep 1
     fi
 
-    echo "Starting dev-browser server (mode: $requested_mode)..." >&2
+    echo "Starting dev-browser server (mode: $mode, port: $SERVER_PORT)..." >&2
     log_debug "Starting server from $DEV_BROWSER_DIR"
     cd "$DEV_BROWSER_DIR" || exit 1
 
-    # Save requested mode for future checks
-    echo "$requested_mode" > "$mode_file"
-
-    # Pass browser mode to server
-    nohup env BROWSER_MODE="$requested_mode" ./server.sh > "$SERVER_LOG" 2>&1 &
+    # Pass browser mode and ports to server
+    nohup env BROWSER_MODE="$mode" HTTP_PORT="$SERVER_PORT" CDP_PORT="$CDP_PORT" ./server.sh > "$SERVER_LOG" 2>&1 &
     local pid=$!
     echo $pid > "$SERVER_PID_FILE"
     log_debug "Server started with PID $pid"
@@ -106,72 +92,75 @@ start_server() {
 }
 
 stop_server() {
-    log_debug "stop_server called"
-    if [[ -f "$SERVER_PID_FILE" ]]; then
-        local pid=$(cat "$SERVER_PID_FILE")
-        if kill -0 "$pid" 2>/dev/null; then
-            echo "Stopping server (PID $pid)..." >&2
-            log_debug "Killing PID $pid"
-            kill "$pid" 2>/dev/null
+    # Stop server for current mode (or all if --all passed)
+    local mode="${BROWSER_MODE:-$(get_current_mode)}"
+
+    if [[ "$1" == "--all" ]]; then
+        echo "Stopping all dev-browser servers..." >&2
+        for m in dev stealth user; do
+            set_mode_vars "$m"
+            if [[ -f "$SERVER_PID_FILE" ]]; then
+                local pid=$(cat "$SERVER_PID_FILE")
+                if kill -0 "$pid" 2>/dev/null; then
+                    echo "  Stopping $m server (PID $pid)..." >&2
+                    kill "$pid" 2>/dev/null
+                fi
+                rm -f "$SERVER_PID_FILE"
+            fi
+        done
+        pkill -f "start-server.ts" 2>/dev/null
+        log_debug "All servers stopped"
+        echo "All servers stopped" >&2
+    else
+        set_mode_vars "$mode"
+        log_debug "stop_server called for mode=$mode"
+        if [[ -f "$SERVER_PID_FILE" ]]; then
+            local pid=$(cat "$SERVER_PID_FILE")
+            if kill -0 "$pid" 2>/dev/null; then
+                echo "Stopping $mode server (PID $pid)..." >&2
+                log_debug "Killing PID $pid"
+                kill "$pid" 2>/dev/null
+                sleep 1
+                # Force kill if still alive
+                kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null
+            fi
             rm -f "$SERVER_PID_FILE"
         fi
+        # Also kill any orphaned server processes for this mode
+        pkill -f "BROWSER_MODE=$mode.*start-server" 2>/dev/null
+        log_debug "Server stopped"
+        echo "Server stopped" >&2
     fi
-    pkill -f "start-server.ts" 2>/dev/null
-    log_debug "Server stopped"
-    echo "Server stopped" >&2
 }
 
 server_status() {
-    echo "=== DEV-BROWSER STATUS ==="
+    echo "=== DEV-BROWSER STATUS (Multi-Server) ==="
+    echo ""
 
-    # Show current mode
-    local mode_file="$SKILL_TMP_DIR/browser_mode"
-    if [[ -f "$mode_file" ]]; then
-        echo "Mode: $(cat "$mode_file")"
-    else
-        echo "Mode: dev (default)"
-    fi
+    # Show status of all modes
+    for mode in dev stealth user; do
+        set_mode_vars "$mode"
+        local status="NOT RUNNING"
+        local pages=""
 
-    if [[ -f "$SERVER_PID_FILE" ]]; then
-        local pid=$(cat "$SERVER_PID_FILE")
-        if kill -0 "$pid" 2>/dev/null; then
-            echo "Process: Running (PID $pid)"
-        else
-            echo "Process: Dead (stale PID file)"
+        if [[ -f "$SERVER_PID_FILE" ]]; then
+            local pid=$(cat "$SERVER_PID_FILE")
+            if kill -0 "$pid" 2>/dev/null; then
+                if check_server_health; then
+                    status="RUNNING (PID $pid, port $SERVER_PORT)"
+                    pages=$(curl -s "http://localhost:$SERVER_PORT/pages" 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); pages=d.get('pages',[]); print(f'{len(pages)} pages')" 2>/dev/null)
+                else
+                    status="UNHEALTHY (PID $pid)"
+                fi
+            fi
         fi
-    else
-        echo "Process: No PID file"
-    fi
 
-    if curl -s --connect-timeout 2 "http://localhost:$SERVER_PORT" &>/dev/null; then
-        echo "Port $SERVER_PORT: Responding"
-    else
-        echo "Port $SERVER_PORT: Not responding"
-    fi
-
-    if check_server_health; then
-        echo "Health: OK (wsEndpoint available)"
-        curl -s "http://localhost:$SERVER_PORT/pages" 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); pages=d.get('pages',[]); print(f'Pages: {len(pages)} active'); [print(f'  - {p}') for p in pages]" 2>/dev/null
-    else
-        echo "Health: UNHEALTHY (no wsEndpoint)"
-    fi
-
-    if [[ -f "$SKILL_TMP_DIR/sessions.json" ]]; then
-        local crashed_at
-        crashed_at=$(python3 -c "import json; d=json.load(open('$SKILL_TMP_DIR/sessions.json')); print(d.get('crashedAt',''))" 2>/dev/null)
-        if [[ -n "$crashed_at" ]]; then
-            echo ""
-            echo "*** PREVIOUS SESSION CRASHED at $crashed_at ***"
-            python3 -c "import json; d=json.load(open('$SKILL_TMP_DIR/sessions.json')); pages=d.get('lostPages',[]); [print(f'  Lost: {p}') for p in pages]" 2>/dev/null
-            echo "  (Re-navigate to lost pages after restart)"
-        fi
-    fi
+        printf "  %-8s %s" "$mode:" "$status"
+        [[ -n "$pages" ]] && printf " - %s" "$pages"
+        echo ""
+    done
 
     echo ""
-    echo "Recent log (last 5 lines):"
-    tail -5 "$SERVER_LOG" 2>/dev/null | sed 's/^/  /' || echo "  (no log file)"
-
-    echo ""
-    echo "Logs: $DEBUG_LOG | $SERVER_LOG"
-    echo "Crash log: $SKILL_TMP_DIR/crash.log"
+    echo "Tip: Use --stealth or --user flag to select mode"
+    echo "     Use --stop to stop current mode, --stop --all to stop all"
 }

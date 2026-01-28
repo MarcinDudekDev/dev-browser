@@ -25,14 +25,18 @@ cmd_wplogin() {
     start_server || return 1
     local PREFIX=$(get_project_prefix)
 
+    # Escape quotes in URL for safe JS embedding
+    local escaped_url="${target_url//\\/\\\\}"
+    escaped_url="${escaped_url//\"/\\\"}"
+
     cd "$DEV_BROWSER_DIR" && ./node_modules/.bin/tsx <<WPLOGIN_SCRIPT
 import { connect, waitForPageLoad } from "@/client.js";
 
-const targetUrl = "${target_url}";
+const targetUrl = "${escaped_url}";
 const username = "admin";
 const password = "admin123";
 
-const client = await connect();
+const client = await connect("http://localhost:${SERVER_PORT}");
 const page = await client.page("${PREFIX}-main");
 
 // Navigate to target URL

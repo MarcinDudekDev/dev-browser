@@ -9,10 +9,9 @@ cmd_screenshot() {
     start_server || return 1
     local PREFIX=$(get_project_prefix)
     mkdir -p "$PROJECT_SCREENSHOTS_DIR"
-
     cd "$DEV_BROWSER_DIR" && ./node_modules/.bin/tsx <<SCREENSHOT_SCRIPT
 import { connect } from "@/client.js";
-const client = await connect();
+const client = await connect("http://localhost:${SERVER_PORT}");
 const pages = await client.list();
 // Try prefixed name first, then raw name for cross-project access
 let pageName = "${PREFIX}-${page_name}";
@@ -27,6 +26,7 @@ if (!pages.includes(pageName)) {
     process.exit(1);
 }
 const page = await client.page(pageName);
+console.log("Page URL:", page.url(), "| Target:", pageName);
 await page.screenshot({ path: "${screenshot_path}", fullPage: true });
 console.log("Screenshot saved:", "${screenshot_path}");
 await client.disconnect();
@@ -53,7 +53,7 @@ const breakpoints = [
     { name: 'desktop', width: 1280, height: 800 },
 ];
 
-const client = await connect();
+const client = await connect("http://localhost:${SERVER_PORT}");
 const pages = await client.list();
 let pageName = "${PREFIX}-${page_name}";
 if (!pages.includes(pageName) && pages.includes("${page_name}")) {
@@ -92,9 +92,17 @@ cmd_resize() {
     local page_name="${3:-main}"
 
     if [[ -z "$width" ]]; then
-        echo "Usage: dev-browser.sh --resize <width> [height] [page]" >&2
+        echo "Usage: dev-browser.sh --resize <width|WIDTHxHEIGHT> [height] [page]" >&2
         echo "  Common widths: 375 (mobile), 768 (tablet), 1024 (laptop), 1280 (desktop)" >&2
+        echo "  Examples: --resize 1440x900  or  --resize 1440 900" >&2
         return 1
+    fi
+
+    # Parse WIDTHxHEIGHT format (e.g. 1440x900)
+    if [[ "$width" =~ ^([0-9]+)x([0-9]+)$ ]]; then
+        height="${BASH_REMATCH[2]}"
+        width="${BASH_REMATCH[1]}"
+        page_name="${2:-main}"
     fi
 
     # Check if height is actually a page name
@@ -108,7 +116,7 @@ cmd_resize() {
 
     cd "$DEV_BROWSER_DIR" && ./node_modules/.bin/tsx <<RESIZE_SCRIPT
 import { connect } from "@/client.js";
-const client = await connect();
+const client = await connect("http://localhost:${SERVER_PORT}");
 const pages = await client.list();
 let pageName = "${PREFIX}-${page_name}";
 if (!pages.includes(pageName) && pages.includes("${page_name}")) {

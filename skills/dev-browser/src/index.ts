@@ -186,12 +186,15 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
       console.log(`Connected to user's Chrome (${contexts.length} context(s))`);
     } catch (err) {
       console.error("\n=== USER MODE SETUP REQUIRED ===");
-      console.error("To use --user mode, start Chrome with remote debugging:");
+      console.error("To use --user mode, start your browser with remote debugging:");
       console.error("");
-      console.error("  macOS:");
-      console.error("    /Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome --remote-debugging-port=9222");
+      console.error("  Chrome:");
+      console.error("    open -a 'Google Chrome' --args --remote-debugging-port=9222");
       console.error("");
-      console.error("  Or add to Chrome shortcut/alias");
+      console.error("  Brave:");
+      console.error("    open -a 'Brave Browser' --args --remote-debugging-port=9222");
+      console.error("");
+      console.error("  Run setup helper: ./scripts/setup-brave-debug.sh");
       console.error("================================\n");
       throw err;
     }
@@ -309,8 +312,19 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
       return;
     }
 
-    // Check if page already exists
+    // Check if page already exists and is still alive
     let entry = registry.get(name);
+    if (entry) {
+      try {
+        // Verify the page is still open and responsive
+        await entry.page.evaluate(() => true);
+      } catch {
+        // Page is dead/closed — remove stale entry and recreate
+        console.log(`Page "${name}" was stale, recreating...`);
+        registry.delete(name);
+        entry = undefined;
+      }
+    }
     if (!entry) {
       // Create new page in the persistent context (with timeout to prevent hangs)
       const page = await withTimeout(context.newPage(), 30000, "Page creation timed out after 30s");
@@ -327,6 +341,12 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
         registry.delete(name);
       });
     }
+
+    // Debug: log what we're returning
+    try {
+      const url = entry.page.url();
+      console.log(`POST /pages "${name}" → targetId=${entry.targetId}, url=${url}`);
+    } catch { /* ignore */ }
 
     const response: GetPageResponse = { wsEndpoint, name, targetId: entry.targetId };
     res.json(response);
@@ -345,6 +365,75 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     }
 
     res.status(404).json({ error: "page not found" });
+  });
+
+  // POST /pages/:name/screenshot - take screenshot using server's Page object
+  // This avoids stale CDP reconnection issues
+  app.post("/pages/:name/screenshot", async (req: Request<{ name: string }>, res: Response) => {
+    const name = decodeURIComponent(req.params.name);
+    const entry = registry.get(name);
+
+    if (!entry) {
+      res.status(404).json({ error: `Page "${name}" not found` });
+      return;
+    }
+
+    try {
+      const { path: savePath, fullPage } = req.body as { path?: string; fullPage?: boolean };
+      const screenshotPath = savePath || `/tmp/screenshot-${Date.now()}.png`;
+      await entry.page.screenshot({ path: screenshotPath, fullPage: fullPage !== false });
+      const url = entry.page.url();
+      console.log(`Screenshot "${name}" → ${screenshotPath} (url=${url})`);
+      res.json({ success: true, path: screenshotPath, url });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // POST /pages/:name/evaluate - evaluate JS using server's Page object
+  app.post("/pages/:name/evaluate", async (req: Request<{ name: string }>, res: Response) => {
+    const name = decodeURIComponent(req.params.name);
+    const entry = registry.get(name);
+
+    if (!entry) {
+      res.status(404).json({ error: `Page "${name}" not found` });
+      return;
+    }
+
+    try {
+      const { code } = req.body as { code: string };
+      const result = await entry.page.evaluate((js: string) => {
+        try {
+          const fn = new Function(`return (${js})`);
+          const res = fn();
+          if (res && typeof res.then === 'function') {
+            return res.then((r: unknown) => ({ success: true, result: r }));
+          }
+          return { success: true, result: res };
+        } catch {
+          try { const fn = new Function(js); fn(); return { success: true, result: undefined }; }
+          catch (e: unknown) { return { success: false, error: e instanceof Error ? e.message : String(e) }; }
+        }
+      }, code);
+      res.json(result);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ success: false, error: msg });
+    }
+  });
+
+  // GET /pages/:name/url - get current page URL from server's Page object
+  app.get("/pages/:name/url", (req: Request<{ name: string }>, res: Response) => {
+    const name = decodeURIComponent(req.params.name);
+    const entry = registry.get(name);
+
+    if (!entry) {
+      res.status(404).json({ error: `Page "${name}" not found` });
+      return;
+    }
+
+    res.json({ url: entry.page.url(), name });
   });
 
   // Start the server

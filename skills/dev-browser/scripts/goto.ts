@@ -9,8 +9,19 @@ if (process.env.CACHEBUST === '1' && url && url !== 'about:blank') {
     url = `${url}${separator}v=${Date.now()}`;
 }
 
-await page.goto(url);
-await waitForPageLoad(page);
+// Navigate with 30s timeout, wait for domcontentloaded (faster than 'load')
+// This prevents zombie processes from hanging on slow pages
+await page.goto(url, {
+    waitUntil: 'domcontentloaded',
+    timeout: 30000
+});
+
+// Additional wait for network idle (10s timeout, won't hang)
+try {
+    await waitForPageLoad(page, { timeout: 10000, waitForNetworkIdle: true });
+} catch {
+    // Page loaded but network still active - proceed anyway
+}
 
 // Gather page info including forms/inputs
 const info = await page.evaluate(() => {

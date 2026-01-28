@@ -4,7 +4,7 @@ description: Browser automation with persistent page state for navigating sites,
 domain: browser
 type: plugin
 frequency: daily
-commands: [goto, click, fill, text, aria, --screenshot, --inspect, --stealth, --user, --styles, --element, --annotate, --watch-design, --console-snapshot, --responsive, --resize, --baselines, --wplogin, --list, --scenarios, --debug, --crashes, --tabs, --cleanup]
+commands: [goto, click, fill, text, aria, upload, dismiss-consent, --screenshot, --inspect, --stealth, --user, --styles, --element, --annotate, --watch-design, --console-snapshot, --responsive, --resize, --baselines, --wplogin, --list, --scenarios, --debug, --crashes, --tabs, --cleanup]
 tools: [~/Tools/dev-browser.sh]
 ---
 
@@ -477,6 +477,32 @@ const result = await client.fillForm("main", {
 console.log(result.filled, result.notFound, result.submitted);
 ```
 Options: `timeout` (5000ms), `submit` (false), `clear` (true)
+
+## Gotchas
+
+### Tally Forms (UUID selectors)
+Tally forms use **random UUID `name` attributes** that change every session. Never use `input[name="uuid-here"]` selectors — they'll break next time.
+
+**Instead**, use label-based selection:
+```bash
+dev-browser.sh fill "Your website" "https://example.com"  # by label text
+dev-browser.sh fill e5 "https://example.com"               # by ARIA ref (run 'aria' first)
+```
+
+### Cookie Consent Overlays
+Google CMP/FC, CookieBot, and OneTrust overlays can block form interaction. Dismiss them:
+```bash
+dev-browser.sh dismiss-consent  # auto-detects and dismisses
+```
+
+### File Uploads
+Use the `upload` command instead of writing custom scripts:
+```bash
+dev-browser.sh upload 'input[type=file]' /tmp/logo.png
+dev-browser.sh upload e5 /tmp/photo.jpg   # by ARIA ref
+dev-browser.sh upload file /tmp/doc.pdf    # by name attr
+```
+Automatically searches iframes (Tally, embedded forms).
 
 ## Debugging Tips
 

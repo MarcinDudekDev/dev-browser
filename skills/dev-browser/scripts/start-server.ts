@@ -6,9 +6,10 @@ import { fileURLToPath } from "url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const tmpDir = join(__dirname, "..", "tmp");
-const profileDir = join(__dirname, "..", "profiles");
-const crashLogFile = join(tmpDir, "crash.log");
-const sessionFile = join(tmpDir, "sessions.json");
+const browserModeForProfile = process.env.BROWSER_MODE || "dev";
+const profileDir = join(__dirname, "..", "profiles", browserModeForProfile);
+const crashLogFile = join(tmpDir, `crash-${browserModeForProfile}.log`);
+const sessionFile = join(tmpDir, `sessions-${browserModeForProfile}.json`);
 
 // Crash logging helper
 function logCrash(message: string) {
@@ -113,13 +114,18 @@ try {
   console.log("You may need to run: npx playwright install chromium");
 }
 
-// Check if server is already running
-console.log("Checking for existing servers...");
+// Get port config early for startup checks
+const startupHttpPort = parseInt(process.env.HTTP_PORT || "9222", 10);
+const startupCdpPort = parseInt(process.env.CDP_PORT || "9223", 10);
+
+// Check if server is already running on this mode's port
+console.log(`Checking for existing server on port ${startupHttpPort}...`);
 try {
-  const res = await fetch("http://localhost:9222", {
+  const res = await fetch(`http://localhost:${startupHttpPort}`, {
     signal: AbortSignal.timeout(1000),
   });
   if (res.ok) {
+    console.log(`Server already running on port ${startupHttpPort}`);
     process.exit(0);
   }
 } catch {
@@ -127,11 +133,11 @@ try {
 }
 
 // Clean up stale CDP port if HTTP server isn't running (crash recovery)
-// This handles the case where Node crashed but Chrome is still running on 9223
+// Port numbers are validated integers, safe for shell use
 try {
-  const pid = execSync("lsof -ti:9223", { encoding: "utf-8" }).trim();
+  const pid = execSync(`lsof -ti:${startupCdpPort}`, { encoding: "utf-8" }).trim();
   if (pid) {
-    console.log(`Cleaning up stale Chrome process on CDP port 9223 (PID: ${pid})`);
+    console.log(`Cleaning up stale Chrome process on CDP port ${startupCdpPort} (PID: ${pid})`);
     execSync(`kill -9 ${pid}`);
   }
 } catch {
@@ -155,12 +161,15 @@ if (previousSession?.crashedAt) {
 console.log("Starting dev browser server...");
 const headless = process.env.HEADLESS === "true";
 const browserMode = (process.env.BROWSER_MODE || "dev") as "dev" | "stealth" | "user";
-console.log(`Browser mode: ${browserMode}`);
+const httpPort = parseInt(process.env.HTTP_PORT || "9222", 10);
+const cdpPort = parseInt(process.env.CDP_PORT || "9223", 10);
+console.log(`Browser mode: ${browserMode} (HTTP: ${httpPort}, CDP: ${cdpPort})`);
 let server: Awaited<ReturnType<typeof serve>>;
 
 try {
   server = await serve({
-    port: 9222,
+    port: httpPort,
+    cdpPort,
     headless,
     profileDir,
     browserMode,
@@ -187,7 +196,7 @@ async function logRestoredSessions() {
     // Wait for Chrome to restore sessions
     await new Promise(r => setTimeout(r, 3000));
 
-    const res = await fetch("http://localhost:9222/pages");
+    const res = await fetch(`http://localhost:${httpPort}/pages`);
     if (!res.ok) return;
 
     const data = await res.json() as { pages: string[] };
@@ -212,7 +221,7 @@ logRestoredSessions();
 // Periodic page tracking (for crash recovery info)
 const pageTracker = setInterval(async () => {
   try {
-    const res = await fetch("http://localhost:9222/pages");
+    const res = await fetch(`http://localhost:${httpPort}/pages`);
     if (res.ok) {
       const data = await res.json() as { pages: string[] };
       saveSessionInfo({

@@ -33,10 +33,23 @@ const res = await fetch(`${serverUrl}/pages/${encodeURIComponent(targetName)}/sc
     body: JSON.stringify({ path: screenshotPath, fullPage: true }),
 });
 
-const result = await res.json() as { success?: boolean; path?: string; url?: string; error?: string };
+const result = await res.json() as { success?: boolean; path?: string; url?: string; viewport?: string; error?: string };
 
 if (result.success) {
-    console.log(`Page URL: ${result.url} | Alias: ${targetName}`);
+    // Get viewport via evaluate endpoint
+    let vpStr = result.viewport || 'unknown';
+    if (vpStr === 'unknown') {
+        try {
+            const vpRes = await fetch(`${serverUrl}/pages/${encodeURIComponent(targetName)}/evaluate`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ code: "({width: window.innerWidth, height: window.innerHeight})" }),
+            });
+            const vpData = await vpRes.json() as { success?: boolean; result?: { width: number; height: number } };
+            if (vpData.success && vpData.result) vpStr = `${vpData.result.width}x${vpData.result.height}`;
+        } catch {}
+    }
+    console.log(`Page URL: ${result.url} | Alias: ${targetName} | Viewport: ${vpStr}`);
     console.log(`Screenshot saved: ${result.path}`);
 } else {
     console.error(`Screenshot failed: ${result.error}`);

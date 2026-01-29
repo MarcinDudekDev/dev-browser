@@ -383,8 +383,10 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
       const screenshotPath = savePath || `/tmp/screenshot-${Date.now()}.png`;
       await entry.page.screenshot({ path: screenshotPath, fullPage: fullPage !== false });
       const url = entry.page.url();
+      const vp = entry.page.viewportSize() ?? await entry.page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight })).catch(() => null);
+      const vpStr = vp ? `${vp.width}x${vp.height}` : 'unknown';
       console.log(`Screenshot "${name}" → ${screenshotPath} (url=${url})`);
-      res.json({ success: true, path: screenshotPath, url });
+      res.json({ success: true, path: screenshotPath, url, viewport: vpStr });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       res.status(500).json({ error: msg });

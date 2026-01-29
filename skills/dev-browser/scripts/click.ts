@@ -63,9 +63,9 @@ if (isRef) {
         }
     }
 
-    // Last resort: selector on main page
+    // Last resort: selector on main page (5s timeout to avoid hanging)
     if (!clicked) {
-        await page.locator(target).first().click();
+        await page.locator(target).first().click({ timeout: 5000 });
         clickedType = "selector";
     }
     await waitForPageLoad(page);

@@ -22,5 +22,7 @@ npm install
 echo "Starting dev-browser server..."
 export HEADLESS=$HEADLESS
 export BROWSER_MODE=${BROWSER_MODE:-dev}
-echo "Browser mode: $BROWSER_MODE"
+export HTTP_PORT=${HTTP_PORT:-9222}
+export CDP_PORT=${CDP_PORT:-9223}
+echo "Browser mode: $BROWSER_MODE (HTTP: $HTTP_PORT, CDP: $CDP_PORT)"
 npx tsx scripts/start-server.ts

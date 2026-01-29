@@ -118,6 +118,12 @@ const page = await client.page("${PAGE_NAME:-main}");
 // User script starts here
 ${SCRIPT}
 
+// Auto-print viewport info
+try {
+    const __vp = page.viewportSize() ?? await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
+    console.log("\\nViewport: " + __vp.width + "x" + __vp.height);
+} catch (__e) {}
+
 // Auto-print console errors (unless --quiet-console/-q flag)
 if ("${QUIET_CONSOLE:-0}" !== "1") {
     const errors = __consoleMessages.filter(m => m.type === 'error');

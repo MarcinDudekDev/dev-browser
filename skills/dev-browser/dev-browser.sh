@@ -32,7 +32,7 @@
 #
 # Modes:      --dev (default) | --stealth (anti-fingerprint) | --user (main browser)
 # Server:     --server | --stop [--all] | --status (multi-server: each mode runs independently)
-# Quick:      goto <url> | click <ref> | jsclick <ref> | fill <ref> <text> | select <ref> <value> | text <ref> | aria
+# Quick:      goto <url> | click <ref> | jsclick <ref> | fill <ref> <text> | select <ref> <value> | text <ref> | aria | scroll-to <selector>
 # Screenshots: --screenshot | --snap | --diff | --baselines | --responsive | --resize
 # Inspect:    --inspect | --page-status | --console | --console-snapshot | --styles | --element | --annotate | --watch-design
 # Scripts:    --run <name> | --chain "cmd|cmd" | --list | --scenario | --scenarios
@@ -134,7 +134,17 @@ case "$1" in
                 export SCREENSHOTS_DIR="$PROJECT_SCREENSHOTS_DIR"
                 export PROJECT_PREFIX=$(get_project_prefix)
                 [[ -n "$2" ]] && PAGE_NAME="$2" && export PAGE_NAME
-                export SCRIPT_ARGS="${3:-}"
+                # Only use $3 as filename if it's not a flag
+                _shot_args="${3:-}"
+                if [[ "$_shot_args" =~ ^-- ]]; then
+                    echo "WARNING: Unknown flag '$_shot_args' ignored (not a dev-browser option)" >&2
+                    _shot_args=""
+                fi
+                # Warn about any extra args beyond $3
+                for _extra in "${@:4}"; do
+                    echo "WARNING: Unknown argument '$_extra' ignored" >&2
+                done
+                export SCRIPT_ARGS="$_shot_args"
                 export SERVER_PORT
                 cd "$DEV_BROWSER_DIR" && ./node_modules/.bin/tsx "$BUILTIN_SCRIPTS_DIR/screenshot.ts"
                 _exit=$?
@@ -209,13 +219,23 @@ case "$1" in
         ;;
 
     # Quick browsing commands (no --run prefix, agent-browser style)
-    goto|click|jsclick|text|fill|select|aria|eval|upload|dismiss-consent)
+    goto|click|jsclick|text|fill|select|aria|eval|upload|dismiss-consent|scroll-to)
         source "$LIB_DIR/server.sh"
         source "$LIB_DIR/runscript.sh"
         start_server || exit 1
-        export SCRIPT_ARGS="${*:2}"
+        # Filter out unknown flags to prevent them leaking into SCRIPT_ARGS
+        _cmd="$1"; shift
+        _clean_args=()
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --*=*) echo "WARNING: Unknown flag '$1' ignored (not a dev-browser option)" >&2; shift ;;
+                --*) echo "WARNING: Unknown flag '$1' ignored (not a dev-browser option)" >&2; shift; [[ $# -gt 0 && ! "$1" =~ ^-- && ! "$1" =~ ^https?:// ]] && shift ;;
+                *) _clean_args+=("$1"); shift ;;
+            esac
+        done
+        export SCRIPT_ARGS="${_clean_args[*]}"
         export PROJECT_PREFIX=$(get_project_prefix)
-        run_script "$BUILTIN_SCRIPTS_DIR/$1.ts"
+        run_script "$BUILTIN_SCRIPTS_DIR/$_cmd.ts"
         exit $?
         ;;
 esac

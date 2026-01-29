@@ -4,11 +4,11 @@ description: Browser automation with persistent page state for navigating sites,
 domain: browser
 type: plugin
 frequency: daily
-commands: [goto, click, fill, text, aria, upload, dismiss-consent, --screenshot, --inspect, --stealth, --user, --styles, --element, --annotate, --watch-design, --console-snapshot, --responsive, --resize, --baselines, --wplogin, --list, --scenarios, --debug, --crashes, --tabs, --cleanup]
+commands: [goto, click, fill, text, aria, eval, scroll-to, select, upload, dismiss-consent, --screenshot, --inspect, --stealth, --user, --styles, --element, --annotate, --watch-design, --console-snapshot, --responsive, --resize, --baselines, --wplogin, --list, --scenarios, --debug, --crashes, --tabs, --cleanup]
 tools: [~/Tools/dev-browser.sh]
 ---
 
-# Dev Browser Skill (v1.4.0)
+# Dev Browser Skill (v1.5.0)
 
 Browser automation that maintains page state across script executions. Multi-server architecture supports running dev, stealth, and user modes simultaneously.
 
@@ -26,11 +26,14 @@ Browser automation that maintains page state across script executions. Multi-ser
 
 ```bash
 # Quick commands (preferred - no --run prefix needed)
-dev-browser.sh goto https://example.com    # Navigate + inspect
-dev-browser.sh click "Submit"              # Click by text/ref
-dev-browser.sh fill email test@example.com # Fill form field
-dev-browser.sh text e5                     # Get text from ref
-dev-browser.sh aria                        # Get ARIA snapshot with refs
+dev-browser.sh goto https://example.com      # Navigate + inspect
+dev-browser.sh click "Submit"                # Click by text/ref/selector
+dev-browser.sh fill email test@example.com   # Fill form field
+dev-browser.sh select country US             # Select dropdown option
+dev-browser.sh text e5                       # Get text from ref/selector
+dev-browser.sh eval 'document.title'         # Evaluate JS in page
+dev-browser.sh scroll-to '.section'          # Scroll element into view
+dev-browser.sh aria                          # Get ARIA snapshot with refs
 
 # Stealth mode (bypasses bot detection)
 dev-browser.sh --stealth goto https://allegro.pl
@@ -38,6 +41,12 @@ dev-browser.sh --stealth goto https://allegro.pl
 # Screenshots (path is in OUTPUT - don't pass it!)
 dev-browser.sh --screenshot main
 dev-browser.sh --screenshot main myshot.png  # optional filename
+
+# Tab management
+dev-browser.sh --tabs                        # List all tabs + registered pages
+dev-browser.sh --cleanup                     # Close orphaned about:blank tabs
+dev-browser.sh --cleanup --all               # Close all unregistered tabs
+dev-browser.sh --cleanup --project marketing # Close specific project's page
 ```
 
 ## Browser Modes

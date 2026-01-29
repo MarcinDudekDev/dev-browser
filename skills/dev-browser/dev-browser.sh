@@ -32,11 +32,11 @@
 #
 # Modes:      --dev (default) | --stealth (anti-fingerprint) | --user (main browser)
 # Server:     --server | --stop [--all] | --status (multi-server: each mode runs independently)
-# Quick:      goto <url> | click <ref> | jsclick <ref> | fill <ref> <text> | select <ref> <value> | text <ref> | aria | scroll-to <selector>
+# Quick:      goto <url> | click <ref> | jsclick <ref> | fill <ref> <text> | select <ref> <value> | text <ref> | aria | scroll-to <selector> | eval <js>
 # Screenshots: --screenshot | --snap | --diff | --baselines | --responsive | --resize
 # Inspect:    --inspect | --page-status | --console | --console-snapshot | --styles | --element | --annotate | --watch-design
 # Scripts:    --run <name> | --chain "cmd|cmd" | --list | --scenario | --scenarios
-# Diagnostics: --debug | --crashes | --tabs | --cleanup
+# Diagnostics: --debug | --crashes | --tabs | --cleanup [--all | --project <prefix>]
 # Other:      --wplogin | --setup-brave | --help
 
 # Resolve script location (follow symlinks)

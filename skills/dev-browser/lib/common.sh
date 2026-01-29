@@ -86,24 +86,21 @@ print_server_error() {
     echo "=========================" >&2
 }
 
-# Cache file for project prefixes (avoids spawning Python repeatedly)
-PREFIX_CACHE_FILE="$SKILL_TMP_DIR/prefix-cache"
-
-# Get project prefix from cwd (cached per-session)
+# Get project prefix — uses tmux session name (constant per window),
+# falls back to projects.json lookup, then directory basename
 get_project_prefix() {
-    local cwd="$PWD"
-
-    # Check cache first (format: path|prefix per line)
-    if [[ -f "$PREFIX_CACHE_FILE" ]]; then
-        local cached
-        cached=$(grep "^${cwd}|" "$PREFIX_CACHE_FILE" 2>/dev/null | head -1 | cut -d'|' -f2)
-        if [[ -n "$cached" ]]; then
-            printf '%s' "$cached"
+    # Priority 1: tmux session name (most reliable — constant per window)
+    if [[ -n "$TMUX" ]]; then
+        local tmux_session
+        tmux_session=$(tmux display-message -p '#S' 2>/dev/null)
+        if [[ -n "$tmux_session" ]]; then
+            printf '%s' "$tmux_session"
             return
         fi
     fi
 
-    # Compute prefix
+    # Priority 2: projects.json lookup by cwd
+    local cwd="$PWD"
     local prefix=""
     if [[ -f "$HOME/.claude/projects.json" ]]; then
         prefix=$(python3 -c "
@@ -121,23 +118,12 @@ except:
     pass
 if found:
     print(found, end='')
-else:
-    print(os.path.basename(cwd).lower().replace(' ', '-')[:20], end='')
 " 2>/dev/null)
     fi
 
-    # Fallback if Python failed
+    # Priority 3: directory basename
     if [[ -z "$prefix" ]]; then
         prefix=$(basename "$cwd" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | cut -c1-20 | tr -d '\n')
-    fi
-
-    # Cache the result (keep last 50 entries)
-    if [[ -n "$prefix" ]]; then
-        mkdir -p "$(dirname "$PREFIX_CACHE_FILE")"
-        # Remove old entry if exists, add new one
-        grep -v "^${cwd}|" "$PREFIX_CACHE_FILE" 2>/dev/null | tail -49 > "$PREFIX_CACHE_FILE.tmp" 2>/dev/null || true
-        printf '%s|%s\n' "$cwd" "$prefix" >> "$PREFIX_CACHE_FILE.tmp"
-        mv "$PREFIX_CACHE_FILE.tmp" "$PREFIX_CACHE_FILE"
     fi
 
     printf '%s' "$prefix"

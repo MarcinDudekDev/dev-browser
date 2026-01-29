@@ -289,7 +289,12 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     const response: ListPagesResponse = {
       pages: Array.from(registry.keys()),
     };
-    res.json(response);
+    // Include target IDs for cleanup cross-referencing
+    const targets: Record<string, string> = {};
+    for (const [name, entry] of registry.entries()) {
+      targets[name] = entry.targetId;
+    }
+    res.json({ ...response, targets });
   });
 
   // POST /pages - get or create page

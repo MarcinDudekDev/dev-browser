@@ -106,17 +106,13 @@ except:
     registered = set()
 
 # Get target IDs for registered pages (to protect them)
-registered_targets = set()
-for name in registered:
-    try:
-        import urllib.parse
-        encoded = urllib.parse.quote(name)
-        # We can't easily get target IDs without another API call, so skip
-    except:
-        pass
+targets = registry.get('targets', {}) if isinstance(registry, dict) else {}
+registered_targets = set(targets.values())
 
 print(f'Total: {len(tabs)} tabs, {len(registered)} registered pages')
 print(f'Registered: {sorted(registered)}')
+if registered_targets:
+    print(f'Protected target IDs: {len(registered_targets)}')
 print()
 
 to_close = []
@@ -126,24 +122,13 @@ if mode == 'blank':
     print(f'Mode: close about:blank tabs ({len(to_close)} found)')
 
 elif mode == '--all' or mode == '--unregistered':
-    # Close everything except tabs that match registered page URLs
-    # We can't match by target ID easily, so keep 1 tab per registered page
-    kept = 0
+    # Close tabs whose CDP target ID is NOT in the registry
     for t in tabs:
-        url = t.get('url', '')
-        # Skip iframes (stripe, etc)
-        if any(x in url.lower() for x in ['stripe.com', 'stripe.network', 'platform.twitter', 'recaptcha']):
-            to_close.append(t)
-            continue
-        if url.startswith('about:'):
-            to_close.append(t)
-            continue
-        # Keep if we still have registered pages to protect
-        if kept < len(registered):
-            kept += 1
-            continue
+        tid = t.get('id', '')
+        if tid in registered_targets:
+            continue  # protected — belongs to a registered page
         to_close.append(t)
-    print(f'Mode: close unregistered tabs ({len(to_close)} found, keeping {kept} registered)')
+    print(f'Mode: close unregistered tabs ({len(to_close)} found, keeping {len(registered_targets)} registered)')
 
 elif mode == '--project':
     if not project_prefix:

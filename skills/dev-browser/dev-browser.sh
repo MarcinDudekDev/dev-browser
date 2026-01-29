@@ -118,7 +118,7 @@ case "$1" in
             --debug) cmd_debug; exit 0 ;;
             --crashes) cmd_crashes; exit 0 ;;
             --tabs) cmd_tabs; exit 0 ;;
-            --cleanup) cmd_cleanup; exit 0 ;;
+            --cleanup) shift; cmd_cleanup "$@"; exit 0 ;;
         esac
         ;;
 

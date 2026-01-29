@@ -4,25 +4,23 @@
 # Check for crash info and notify agent
 check_crash_recovery() {
     local sessions_file="$SKILL_TMP_DIR/sessions.json"
-    if [[ -f "$sessions_file" ]]; then
+    if [[ -f "$sessions_file" ]] && grep -q '"crashedAt"' "$sessions_file" 2>/dev/null; then
         local crashed_at
-        crashed_at=$(python3 -c "import json; d=json.load(open('$sessions_file')); print(d.get('crashedAt',''))" 2>/dev/null)
+        crashed_at=$(grep -o '"crashedAt"[[:space:]]*:[[:space:]]*"[^"]*"' "$sessions_file" | head -1 | sed 's/.*: *"//;s/"//')
         if [[ -n "$crashed_at" ]]; then
             echo "" >&2
             echo "=== DEV-BROWSER RECOVERY ===" >&2
             echo "Previous session crashed at $crashed_at" >&2
-            python3 -c "
-import json
-d = json.load(open('$sessions_file'))
-pages = d.get('lostPages', [])
-if pages:
-    print('Lost pages that need re-navigation:', file=__import__('sys').stderr)
-    for p in pages:
-        print(f'  - {p}', file=__import__('sys').stderr)
-    print('', file=__import__('sys').stderr)
-    print('Chrome may have restored the tabs, but you need to re-register them.', file=__import__('sys').stderr)
-    print('Tip: Navigate to your test URL again with page.goto()', file=__import__('sys').stderr)
-" 2>/dev/null
+            # Extract lost pages with grep
+            if grep -q '"lostPages"' "$sessions_file" 2>/dev/null; then
+                echo "Lost pages that need re-navigation:" >&2
+                grep -o '"lostPages"[[:space:]]*:[[:space:]]*\[[^]]*\]' "$sessions_file" | grep -o '"[^"]*"' | tail -n +2 | sed 's/"//g' | while read -r p; do
+                    echo "  - $p" >&2
+                done
+                echo "" >&2
+                echo "Chrome may have restored the tabs, but you need to re-register them." >&2
+                echo "Tip: Navigate to your test URL again with page.goto()" >&2
+            fi
             echo "===========================" >&2
             echo "" >&2
             return 0  # crash detected
@@ -31,8 +29,31 @@ if pages:
     return 1  # no crash
 }
 
+## Server-eval fast path: bypass tsx for pure page.evaluate() scripts
+## Scripts place a shell handler in scripts/<name>.sh alongside the .ts file
+## The .sh file receives SCRIPT_ARGS and SERVER_PORT/PAGE_NAME/PROJECT_PREFIX env vars
+## and uses curl to hit the server's /evaluate endpoint directly (~50ms vs ~700ms)
+run_script_fast() {
+    local shell_script="$1"
+    # PROJECT_PREFIX is already exported by dev-browser.sh — use it as-is
+    export SERVER_PORT PAGE_NAME
+    bash "$shell_script"
+}
+
 run_script() {
     local script_file="$1"
+
+    # Fast path: check for .sh companion script (server-side, no tsx)
+    if [[ -n "$script_file" && -f "$script_file" ]]; then
+        local shell_companion="${script_file%.ts}.sh"
+        if [[ -f "$shell_companion" ]]; then
+            run_script_fast "$shell_companion"
+            local fast_exit=$?
+            # Exit 99 = ARIA ref or feature needing tsx; fall through
+            [[ $fast_exit -ne 99 ]] && return $fast_exit
+        fi
+    fi
+
     local PREFIX=$(get_project_prefix)
     local SCRIPT=""
     local MAX_RETRIES=1
@@ -45,14 +66,13 @@ run_script() {
         SCRIPT=$(cat)
     fi
 
-    # Strip boilerplate for backward compatibility with existing scripts
-    # Remove: const client = await connect();
-    # Remove: const page = await client.page("...");
-    # Remove: await client.disconnect();
-    SCRIPT=$(echo "$SCRIPT" | sed -E \
-        -e '/^[[:space:]]*(const|let|var)[[:space:]]+client[[:space:]]*=[[:space:]]*await[[:space:]]+connect\(\)/d' \
-        -e '/^[[:space:]]*(const|let|var)[[:space:]]+page[[:space:]]*=[[:space:]]*await[[:space:]]+client\.page\(/d' \
-        -e '/^[[:space:]]*await[[:space:]]+client\.disconnect\(\)/d')
+    # Strip boilerplate for backward compatibility with user scripts (not builtins)
+    if [[ -n "$script_file" && "$script_file" != *"/scripts/"* ]]; then
+        SCRIPT=$(echo "$SCRIPT" | sed -E \
+            -e '/^[[:space:]]*(const|let|var)[[:space:]]+client[[:space:]]*=[[:space:]]*await[[:space:]]+connect\(\)/d' \
+            -e '/^[[:space:]]*(const|let|var)[[:space:]]+page[[:space:]]*=[[:space:]]*await[[:space:]]+client\.page\(/d' \
+            -e '/^[[:space:]]*await[[:space:]]+client\.disconnect\(\)/d')
+    fi
 
     # Create temp script file with .mts extension for ESM support
     get_project_paths  # sets PROJECT_TMP_DIR

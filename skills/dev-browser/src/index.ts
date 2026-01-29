@@ -316,10 +316,19 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     let entry = registry.get(name);
     if (entry) {
       try {
-        // Verify the page is still open and responsive
-        await entry.page.evaluate(() => true);
+        // Verify the page is still open — use isClosed() first (no network call),
+        // then evaluate only if needed. This avoids false positives during navigation.
+        if (entry.page.isClosed()) {
+          throw new Error("page closed");
+        }
+        await entry.page.evaluate(() => true).catch(async () => {
+          // Page might be mid-navigation — wait briefly and retry once
+          await new Promise(r => setTimeout(r, 500));
+          if (entry!.page.isClosed()) throw new Error("page closed");
+          await entry!.page.evaluate(() => true);
+        });
       } catch {
-        // Page is dead/closed — remove stale entry and recreate
+        // Page is truly dead/closed — remove stale entry and recreate
         console.log(`Page "${name}" was stale, recreating...`);
         registry.delete(name);
         entry = undefined;
@@ -436,6 +445,149 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     }
 
     res.json({ url: entry.page.url(), name });
+  });
+
+  // ── Fast-path endpoints (skip tsx) ──────────────────────────────
+
+  // Helper: get page entry or 404
+  const getPageEntry = (req: Request<{ name: string }>, res: Response) => {
+    const name = decodeURIComponent(req.params.name);
+    const entry = registry.get(name);
+    if (!entry) {
+      res.status(404).json({ error: `Page "${name}" not found` });
+      return null;
+    }
+    return { name, entry };
+  };
+
+  // POST /pages/:name/goto - navigate to URL
+  app.post("/pages/:name/goto", async (req: Request<{ name: string }>, res: Response) => {
+    const r = getPageEntry(req, res);
+    if (!r) return;
+    const { entry } = r;
+    try {
+      let { url, cachebust } = req.body as { url: string; cachebust?: boolean };
+      if (!url) { res.status(400).json({ error: "url is required" }); return; }
+      if (cachebust && url !== "about:blank") {
+        const sep = url.includes("?") ? "&" : "?";
+        url = `${url}${sep}v=${Date.now()}`;
+      }
+      await entry.page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+      try { await entry.page.waitForLoadState("networkidle", { timeout: 10000 }); } catch { /* proceed */ }
+
+      const info = await entry.page.evaluate(() => {
+        const links = Array.from(document.querySelectorAll("a[href]"))
+          .map(a => ({ href: a.getAttribute("href") || "", text: (a.textContent?.trim() || "").substring(0, 50) }))
+          .filter(l => l.href && l.href !== "#" && !l.href.startsWith("javascript:") && !l.href.startsWith("mailto:"))
+          .slice(0, 15);
+        return { links };
+      });
+      res.json({ url: entry.page.url(), title: await entry.page.title(), ...info });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // POST /pages/:name/click - click element by text or CSS selector
+  app.post("/pages/:name/click", async (req: Request<{ name: string }>, res: Response) => {
+    const r = getPageEntry(req, res);
+    if (!r) return;
+    const { entry } = r;
+    try {
+      const { target } = req.body as { target: string };
+      if (!target) { res.status(400).json({ error: "target is required" }); return; }
+
+      let clickedType = "";
+      let clicked = false;
+
+      // Try button role
+      try { await entry.page.getByRole("button", { name: target }).click({ timeout: 3000 }); clickedType = "button"; clicked = true; } catch {}
+      // Try link role
+      if (!clicked) { try { await entry.page.getByRole("link", { name: target }).click({ timeout: 3000 }); clickedType = "link"; clicked = true; } catch {} }
+      // Try frames
+      if (!clicked) {
+        for (const frame of entry.page.frames()) {
+          if (clicked) break;
+          try { await frame.getByRole("button", { name: target }).click({ timeout: 2000 }); clickedType = "button (frame)"; clicked = true; } catch {
+            try { await frame.getByRole("link", { name: target }).click({ timeout: 2000 }); clickedType = "link (frame)"; clicked = true; } catch {}
+          }
+        }
+      }
+      // CSS selector fallback
+      if (!clicked) { await entry.page.locator(target).first().click({ timeout: 5000 }); clickedType = "selector"; }
+
+      try { await entry.page.waitForLoadState("domcontentloaded", { timeout: 5000 }); } catch {}
+      const info = await entry.page.evaluate(() => ({
+        buttons: [...document.querySelectorAll("button")].slice(0, 5).map(b => b.textContent?.trim()).filter(Boolean),
+        links: [...document.querySelectorAll("a")].slice(0, 5).map(a => a.textContent?.trim()).filter(Boolean),
+      }));
+      res.json({ clicked: target, type: clickedType, url: entry.page.url(), next: info });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // POST /pages/:name/fill - fill form field by name/id/label/selector
+  app.post("/pages/:name/fill", async (req: Request<{ name: string }>, res: Response) => {
+    const r = getPageEntry(req, res);
+    if (!r) return;
+    const { entry } = r;
+    try {
+      const { target, value } = req.body as { target: string; value: string };
+      if (!target || value === undefined) { res.status(400).json({ error: "target and value are required" }); return; }
+
+      const looksLikeSelector = /^[a-z]+\[|^\[|^#|^\./.test(target);
+      let filled = false;
+      let filledWith = "";
+
+      if (looksLikeSelector) {
+        try { const el = entry.page.locator(target).first(); if (await el.count() > 0) { await el.fill(value); filledWith = target; filled = true; } } catch {}
+      }
+      if (!filled) {
+        for (const sel of [`[name="${target}"]`, `#${target}`, `[placeholder*="${target}" i]`]) {
+          try { const el = entry.page.locator(sel).first(); if (await el.count() > 0) { await el.fill(value); filledWith = sel; filled = true; break; } } catch {}
+        }
+      }
+      if (!filled) { try { await entry.page.getByLabel(target).fill(value); filledWith = `label:${target}`; filled = true; } catch {} }
+      if (!filled) { res.status(404).json({ error: `Field '${target}' not found` }); return; }
+
+      res.json({ filled: target, value, selector: filledWith });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // POST /pages/:name/select - select option by value
+  app.post("/pages/:name/select", async (req: Request<{ name: string }>, res: Response) => {
+    const r = getPageEntry(req, res);
+    if (!r) return;
+    const { entry } = r;
+    try {
+      const { target, value } = req.body as { target: string; value: string };
+      if (!target || !value) { res.status(400).json({ error: "target and value are required" }); return; }
+      const sel = /^[.#\[]/.test(target) ? target : `[name="${target}"], #${target}`;
+      await entry.page.locator(sel).first().selectOption(value);
+      res.json({ selected: target, value });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // POST /pages/:name/text - get text content of element
+  app.post("/pages/:name/text", async (req: Request<{ name: string }>, res: Response) => {
+    const r = getPageEntry(req, res);
+    if (!r) return;
+    const { entry } = r;
+    try {
+      const { target } = req.body as { target: string };
+      if (!target) { res.status(400).json({ error: "target is required" }); return; }
+      const el = entry.page.locator(target).first();
+      if (await el.count() === 0) { res.status(404).json({ error: `Selector '${target}' not found` }); return; }
+      const text = await el.textContent();
+      res.json({ text: text?.trim() || "" });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
   });
 
   // Start the server

@@ -2,9 +2,18 @@
 # Server management functions - multi-server support (one per mode)
 
 # Cleanup orphaned about:blank tabs (silent, runs in background)
+# Only closes blank tabs NOT tracked by the server registry
 cleanup_orphaned_tabs() {
-    # Quick check if CDP is available
-    curl -s --connect-timeout 1 "http://localhost:$CDP_PORT/json/list" 2>/dev/null | python3 -c "
+    {
+    # Wait for any pending page creation to complete
+    sleep 2
+
+    # Get CDP tab list and server registry
+    cdp_json=$(curl -s --connect-timeout 1 "http://localhost:$CDP_PORT/json/list" 2>/dev/null) || exit 0
+    registry_json=$(curl -s --connect-timeout 1 "http://localhost:$SERVER_PORT/pages" 2>/dev/null) || exit 0
+
+    # Cross-reference: only close blank tabs not in registry
+    echo "$cdp_json" | python3 -c "
 import sys, json, urllib.request
 
 try:
@@ -12,12 +21,26 @@ try:
 except:
     sys.exit(0)
 
+# Get registered page count (if registry has pages, be conservative)
+try:
+    registry = json.loads('$registry_json')
+    registered_count = len(registry.get('pages', []))
+except:
+    registered_count = 0
+
 blank = [t for t in tabs if t.get('url','').startswith('about:blank')]
 if not blank:
     sys.exit(0)
 
+# If we have registered pages, leave at least that many blank tabs alone
+# (they might be freshly created pages awaiting navigation)
+if registered_count > 0 and len(blank) <= registered_count:
+    sys.exit(0)
+
+# Only close excess blank tabs (those clearly not registered)
+excess = blank[registered_count:] if registered_count > 0 else blank
 closed = 0
-for t in blank:
+for t in excess:
     target_id = t.get('id')
     if target_id:
         try:
@@ -28,7 +51,8 @@ for t in blank:
 
 if closed > 0:
     print(f'Cleaned up {closed} orphaned tabs', file=sys.stderr)
-" 2>&1 &
+" 2>&1
+    } &
 }
 
 start_server() {
@@ -64,9 +88,9 @@ start_server() {
 
     local count=0
     while ! check_server_health; do
-        sleep 1
+        sleep 0.3
         count=$((count + 1))
-        if [[ $count -ge 30 ]]; then
+        if [[ $count -ge 100 ]]; then
             log_debug "Server startup timeout after 30s"
             print_server_error "Startup timeout (30s)"
             echo "Last 10 lines of server log:" >&2

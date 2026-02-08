@@ -38,3 +38,19 @@ temp/
 
 # Browser profiles
 profiles/
+
+# Backup files
+*.bak
+
+# Local screenshots
+screenshots/
+
+# Experimental/variant directories
+*-optimized/
+*-stable/
+
+# Broken untracked dir from process.env expansion
+${process.env.HOME}/
+
+# Staging scripts (project-specific)
+skills/dev-browser/scripts/staging/

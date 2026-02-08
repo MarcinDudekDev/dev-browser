@@ -5,7 +5,7 @@ domain: browser
 type: plugin
 frequency: daily
 commands: [goto, click, fill, text, aria, eval, scroll-to, select, upload, dismiss-consent, --screenshot, --inspect, --stealth, --user, --styles, --element, --annotate, --watch-design, --console-snapshot, --responsive, --resize, --baselines, --wplogin, --list, --scenarios, --debug, --crashes, --tabs, --cleanup]
-tools: [~/Tools/dev-browser.sh]
+tools: [dev-browser.sh]
 ---
 
 # Dev Browser Skill (v1.5.0)
@@ -139,7 +139,7 @@ dev-browser.sh --crashes             # Show browser crash logs
 dev-browser.sh --cleanup             # Cleanup stale resources
 ```
 
-**Script template** (`~/Tools/dev-browser-scripts/myproject/test.ts`):
+**Script template** (`$DEV_BROWSER_HOME/scripts/myproject/test.ts`):
 ```typescript
 // client and page are AUTO-INJECTED - do NOT add connect()/page() boilerplate!
 // Default page is "main", override with: dev-browser.sh -p other --run script
@@ -228,7 +228,7 @@ Run `dev-browser.sh --setup-brave` for detailed instructions.
 
 ## Writing Scripts
 
-Save to `~/Tools/dev-browser-scripts/{project}/script.ts`, run with `--run {project}/script`.
+Save to `$DEV_BROWSER_HOME/scripts/{project}/script.ts`, run with `--run {project}/script`.
 
 **Principles:**
 - **Small scripts**: ONE action per script (navigate, click, fill, check)
@@ -337,7 +337,7 @@ steps:
   - screenshot: dashboard.png
 ```
 
-**Run:** `~/Tools/dev-browser.sh --scenario wp-login`
+**Run:** `dev-browser.sh --scenario wp-login`
 
 **Features:**
 - Variable substitution with env fallbacks
@@ -421,8 +421,8 @@ await new Promise(r => setTimeout(r, 5000)); // TODO: remove - just watching ani
 
 **Via CLI:**
 ```bash
-~/Tools/dev-browser.sh --screenshot main
-~/Tools/dev-browser.sh --screenshot main myshot.png  # optional filename
+dev-browser.sh --screenshot main
+dev-browser.sh --screenshot main myshot.png  # optional filename
 # Output: Screenshot saved: /Users/.../screenshots/myshot.png
 #         USE THIS PATH from the output!
 ```
@@ -525,11 +525,11 @@ Automatically searches iframes (Tally, embedded forms).
 
 If a script fails, the page state is preserved. You can:
 
-1. Take a screenshot: `~/Tools/dev-browser.sh --screenshot main`
-2. Check status: `~/Tools/dev-browser.sh --page-status main`
-3. Inspect elements: `~/Tools/dev-browser.sh --inspect main`
+1. Take a screenshot: `dev-browser.sh --screenshot main`
+2. Check status: `dev-browser.sh --page-status main`
+3. Inspect elements: `dev-browser.sh --inspect main`
 
-Or write a debug script (`~/Tools/dev-browser-scripts/{project}/debug.ts`):
+Or write a debug script (`$DEV_BROWSER_HOME/scripts/{project}/debug.ts`):
 ```typescript
 // client and page auto-injected
 await page.screenshot({ filename: "debug.png" });

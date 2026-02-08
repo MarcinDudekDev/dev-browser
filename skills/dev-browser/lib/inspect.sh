@@ -1200,11 +1200,11 @@ cmd_watch_design() {
     fi
 
     # Check if design-compare tool exists
-    if ! command -v design-compare &> /dev/null && [[ ! -x "$HOME/Tools/design-compare" ]]; then
+    if ! command -v design-compare &> /dev/null && [[ ! -x "$DEV_BROWSER_HOME/design-compare" ]]; then
         echo "Error: design-compare tool not found. Install it first." >&2
         return 1
     fi
-    local DESIGN_COMPARE="${HOME}/Tools/design-compare"
+    local DESIGN_COMPARE="$(command -v design-compare 2>/dev/null || echo "$DEV_BROWSER_HOME/design-compare")"
 
     start_server || return 1
     local PREFIX=$(get_project_prefix)

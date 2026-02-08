@@ -356,11 +356,11 @@ steps:
 
 ```bash
 # Run scenario
-~/Tools/dev-browser.sh --scenario wp-admin-login
+dev-browser.sh --scenario wp-admin-login
 
 # With variable overrides
-~/Tools/dev-browser.sh --scenario checkout-flow WP_URL=http://staging.site
+dev-browser.sh --scenario checkout-flow WP_URL=http://staging.site
 
 # Dry-run (show generated script)
-~/Tools/dev-browser.sh --scenario wp-admin-login --dry-run
+dev-browser.sh --scenario wp-admin-login --dry-run
 ```

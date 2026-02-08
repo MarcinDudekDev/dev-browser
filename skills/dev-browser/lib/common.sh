@@ -48,10 +48,13 @@ set_mode_vars() {
 
 # Initialize with default mode (will be overridden when mode is known)
 set_mode_vars "dev"
-SCREENSHOTS_DIR="${SCREENSHOTS_DIR:-$HOME/Tools/screenshots}"
+# DEV_BROWSER_HOME: root directory for user data (screenshots, scripts, tools)
+# Override via env var or set in ~/.dev-browser/config
+DEV_BROWSER_HOME="${DEV_BROWSER_HOME:-$HOME/.dev-browser}"
+SCREENSHOTS_DIR="${SCREENSHOTS_DIR:-$DEV_BROWSER_HOME/screenshots}"
 BUILTIN_SCRIPTS_DIR="$DEV_BROWSER_DIR/scripts"
-USER_SCRIPTS_DIR="$HOME/Tools/dev-browser-scripts"
-VISUAL_DIFF="$HOME/Tools/visual-diff"
+USER_SCRIPTS_DIR="${USER_SCRIPTS_DIR:-$DEV_BROWSER_HOME/scripts}"
+VISUAL_DIFF="${VISUAL_DIFF:-$DEV_BROWSER_HOME/visual-diff}"
 
 # Debug logging (keeps last 500 lines)
 log_debug() {

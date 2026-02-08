@@ -43,7 +43,7 @@ dev-browser.sh --stop               # Stop current mode
 ```
 
 ## TypeScript Scripts
-Save to `~/Tools/dev-browser-scripts/{project}/script.ts`:
+Save to `$DEV_BROWSER_HOME/scripts/{project}/script.ts`:
 ```typescript
 // client and page are AUTO-INJECTED
 await page.goto("https://example.com");

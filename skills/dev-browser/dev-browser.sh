@@ -133,18 +133,19 @@ case "$1" in
                 get_project_paths
                 export SCREENSHOTS_DIR="$PROJECT_SCREENSHOTS_DIR"
                 export PROJECT_PREFIX=$(get_project_prefix)
-                [[ -n "$2" ]] && PAGE_NAME="$2" && export PAGE_NAME
-                # Only use $3 as filename if it's not a flag
-                _shot_args="${3:-}"
-                if [[ "$_shot_args" =~ ^-- ]]; then
-                    echo "WARNING: Unknown flag '$_shot_args' ignored (not a dev-browser option)" >&2
-                    _shot_args=""
-                fi
-                # Warn about any extra args beyond $3
-                for _extra in "${@:4}"; do
-                    echo "WARNING: Unknown argument '$_extra' ignored" >&2
+                shift # consume --screenshot
+                # Parse remaining args: [page] [filename] [--scroll-to <selector|pixels>]
+                _page="" _fname="" _scroll_to=""
+                while [[ $# -gt 0 ]]; do
+                    case "$1" in
+                        --scroll-to) _scroll_to="${2:-}"; shift 2 ;;
+                        --*) echo "WARNING: Unknown flag '$1' ignored" >&2; shift ;;
+                        *) if [[ -z "$_page" ]]; then _page="$1"; elif [[ -z "$_fname" ]]; then _fname="$1"; else echo "WARNING: Unknown argument '$1' ignored" >&2; fi; shift ;;
+                    esac
                 done
-                export SCRIPT_ARGS="$_shot_args"
+                [[ -n "$_page" ]] && PAGE_NAME="$_page" && export PAGE_NAME
+                export SCRIPT_ARGS="$_fname"
+                [[ -n "$_scroll_to" ]] && export SCROLL_TO="$_scroll_to"
                 export SERVER_PORT
                 cd "$DEV_BROWSER_DIR" && ./node_modules/.bin/tsx "$BUILTIN_SCRIPTS_DIR/screenshot.ts"
                 _exit=$?
@@ -219,15 +220,25 @@ case "$1" in
         ;;
 
     # Quick browsing commands (no --run prefix, agent-browser style)
-    goto|click|jsclick|text|fill|select|aria|eval|upload|dismiss-consent|scroll-to)
+    goto|click|jsclick|text|fill|select|select-react|aria|eval|upload|dismiss-consent|scroll-to|dismiss-overlays|drag|extract)
         source "$LIB_DIR/server.sh"
         source "$LIB_DIR/runscript.sh"
         start_server || exit 1
         # Filter out unknown flags to prevent them leaking into SCRIPT_ARGS
         _cmd="$1"; shift
         _clean_args=()
+        _force_click=0
         while [[ $# -gt 0 ]]; do
             case "$1" in
+                --force)
+                    # Support --force flag for click command
+                    if [[ "$_cmd" == "click" ]]; then
+                        _force_click=1
+                    else
+                        echo "WARNING: --force only supported for 'click' command" >&2
+                    fi
+                    shift
+                    ;;
                 --*=*) echo "WARNING: Unknown flag '$1' ignored (not a dev-browser option)" >&2; shift ;;
                 --*) echo "WARNING: Unknown flag '$1' ignored (not a dev-browser option)" >&2; shift; [[ $# -gt 0 && ! "$1" =~ ^-- && ! "$1" =~ ^https?:// ]] && shift ;;
                 *) _clean_args+=("$1"); shift ;;
@@ -235,6 +246,7 @@ case "$1" in
         done
         export SCRIPT_ARGS="${_clean_args[*]}"
         export PROJECT_PREFIX=$(get_project_prefix)
+        [[ $_force_click -eq 1 ]] && export FORCE_CLICK=1
         run_script "$BUILTIN_SCRIPTS_DIR/$_cmd.ts"
         exit $?
         ;;

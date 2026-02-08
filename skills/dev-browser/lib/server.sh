@@ -68,11 +68,14 @@ start_server() {
         return 0
     fi
 
-    # Port responds but wsEndpoint missing = zombie state
+    # Port responds but health fails = zombie state (browser crashed but Express alive)
     if curl -s --connect-timeout 2 "http://localhost:$SERVER_PORT" &>/dev/null; then
-        log_debug "Port responds but wsEndpoint missing - zombie state, restarting"
-        echo "Server in bad state, restarting..." >&2
+        log_debug "Port responds but health check failed - zombie state, restarting"
+        echo "Server in bad state (browser likely crashed), restarting..." >&2
         stop_server
+        sleep 1
+        # Also kill any orphaned CDP processes on the port
+        lsof -ti:$CDP_PORT 2>/dev/null | xargs kill -9 2>/dev/null
         sleep 1
     fi
 

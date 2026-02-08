@@ -114,23 +114,34 @@ cmd_resize() {
     start_server || return 1
     local PREFIX=$(get_project_prefix)
 
-    cd "$DEV_BROWSER_DIR" && ./node_modules/.bin/tsx <<RESIZE_SCRIPT
-import { connect } from "@/client.js";
-const client = await connect("http://localhost:${SERVER_PORT}");
-const pages = await client.list();
-let pageName = "${PREFIX}-${page_name}";
-if (!pages.includes(pageName) && pages.includes("${page_name}")) {
-    pageName = "${page_name}";
-}
-if (!pages.includes(pageName)) {
-    console.error("Page '${page_name}' not found");
-    console.error("Available pages:", pages.join(", "));
-    await client.disconnect();
-    process.exit(1);
-}
-const page = await client.page(pageName);
-await page.setViewportSize({ width: ${width}, height: ${height} });
-console.log("Viewport resized to ${width}x${height}");
-await client.disconnect();
-RESIZE_SCRIPT
+    # Use server-side resize endpoint so the server's Page object stays in sync
+    # (client-side setViewportSize via CDP doesn't update the server's cached state)
+    local full_name="${PREFIX}-${page_name}"
+    local target_name="$full_name"
+
+    # Check which page name exists
+    local pages_json
+    pages_json=$(curl -s "http://localhost:${SERVER_PORT}/pages")
+    if ! echo "$pages_json" | python3 -c "import sys,json; pages=json.load(sys.stdin)['pages']; sys.exit(0 if '${full_name}' in pages else 1)" 2>/dev/null; then
+        if echo "$pages_json" | python3 -c "import sys,json; pages=json.load(sys.stdin)['pages']; sys.exit(0 if '${page_name}' in pages else 1)" 2>/dev/null; then
+            target_name="$page_name"
+        else
+            echo "Page '${page_name}' not found (full name: ${full_name})" >&2
+            echo "Available pages:" >&2
+            echo "$pages_json" | python3 -c "import sys,json; [print('  -',p) for p in json.load(sys.stdin)['pages']]" 2>/dev/null
+            return 1
+        fi
+    fi
+
+    local result
+    result=$(curl -s -X POST "http://localhost:${SERVER_PORT}/pages/$(python3 -c "import urllib.parse; print(urllib.parse.quote('${target_name}'))")/resize" \
+        -H "Content-Type: application/json" \
+        -d "{\"width\":${width},\"height\":${height}}")
+
+    if echo "$result" | python3 -c "import sys,json; d=json.load(sys.stdin); sys.exit(0 if d.get('success') else 1)" 2>/dev/null; then
+        echo "Viewport resized to ${width}x${height}"
+    else
+        echo "Resize failed: $result" >&2
+        return 1
+    fi
 }

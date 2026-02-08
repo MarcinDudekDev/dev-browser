@@ -10,6 +10,7 @@ import type {
   ListPagesResponse,
   ServerInfoResponse,
 } from "./types";
+import { humanMouseMove, getElementCenter, startIdleMovement, stopIdleMovement } from "./mouse-human";
 
 export type { ServeOptions, GetPageResponse, ListPagesResponse, ServerInfoResponse };
 
@@ -167,6 +168,48 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
   let wsEndpoint: string;
   let browser: Awaited<ReturnType<typeof chromium.connectOverCDP>> | null = null;
 
+  // Reusable launcher for dev/stealth modes — called on startup and after browser crash
+  const userDataDir = (browserMode !== "user")
+    ? (profileDir ? join(profileDir, "browser-data") : join(process.cwd(), ".browser-data"))
+    : "";
+
+  async function launchBrowserContext(): Promise<void> {
+    if (browserMode !== "user") {
+      mkdirSync(userDataDir, { recursive: true });
+      fixChromePreferences(userDataDir);
+      console.log("Launching browser with persistent context...");
+      context = await chromium.launchPersistentContext(userDataDir, {
+        headless,
+        args: [
+          `--remote-debugging-port=${cdpPort}`,
+          "--restore-last-session",
+          "--disable-session-crashed-bubble",
+          ...(browserMode === "stealth" ? [
+            "--disable-blink-features=AutomationControlled",
+          ] : []),
+        ],
+      });
+      console.log("Browser launched with persistent profile...");
+      const cdpResponse = await fetchWithRetry(`http://127.0.0.1:${cdpPort}/json/version`);
+      const cdpInfo = (await cdpResponse.json()) as { webSocketDebuggerUrl: string };
+      wsEndpoint = cdpInfo.webSocketDebuggerUrl;
+    }
+  }
+
+  // Check if context is alive; if dead, relaunch (dev/stealth only)
+  async function ensureContext(): Promise<void> {
+    if (browserMode === "user") return;
+    try {
+      // Quick liveness check — if context is closed this throws
+      await context.pages();
+    } catch {
+      console.log("Browser context is dead — relaunching...");
+      registry.clear();
+      await launchBrowserContext();
+      console.log("Browser relaunched successfully");
+    }
+  }
+
   if (browserMode === "user") {
     // USER MODE: Connect to user's existing Chrome browser
     console.log(`Connecting to user's Chrome on CDP port ${userCdpPort}...`);
@@ -199,35 +242,8 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
       throw err;
     }
   } else {
-    // DEV or STEALTH MODE: Launch persistent context
-    const userDataDir = profileDir
-      ? join(profileDir, "browser-data")
-      : join(process.cwd(), ".browser-data");
-
-    mkdirSync(userDataDir, { recursive: true });
     console.log(`Using persistent browser profile: ${userDataDir}`);
-
-    fixChromePreferences(userDataDir);
-
-    console.log("Launching browser with persistent context...");
-
-    context = await chromium.launchPersistentContext(userDataDir, {
-      headless,
-      args: [
-        `--remote-debugging-port=${cdpPort}`,
-        "--restore-last-session",
-        "--disable-session-crashed-bubble",
-        // Additional stealth args
-        ...(browserMode === "stealth" ? [
-          "--disable-blink-features=AutomationControlled",
-        ] : []),
-      ],
-    });
-    console.log("Browser launched with persistent profile...");
-
-    const cdpResponse = await fetchWithRetry(`http://127.0.0.1:${cdpPort}/json/version`);
-    const cdpInfo = (await cdpResponse.json()) as { webSocketDebuggerUrl: string };
-    wsEndpoint = cdpInfo.webSocketDebuggerUrl;
+    await launchBrowserContext();
   }
 
   console.log(`CDP WebSocket endpoint: ${wsEndpoint}`);
@@ -279,9 +295,15 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     res.json(response);
   });
 
-  // GET /health - quick health check (no JSON parsing needed)
-  app.get("/health", (_req: Request, res: Response) => {
-    res.status(200).send("ok");
+  // GET /health - quick health check (verifies browser context is alive)
+  app.get("/health", async (_req: Request, res: Response) => {
+    try {
+      // Verify context is actually functional, not just that Express is running
+      await context.pages();
+      res.status(200).send("ok");
+    } catch {
+      res.status(503).send("browser-dead");
+    }
   });
 
   // GET /pages - list all pages
@@ -340,11 +362,18 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
       }
     }
     if (!entry) {
+      // Ensure browser context is alive (auto-relaunch if crashed)
+      await ensureContext();
       // Create new page in the persistent context (with timeout to prevent hangs)
       const page = await withTimeout(context.newPage(), 30000, "Page creation timed out after 30s");
 
       // Inject stealth scripts for stealth mode
       await injectStealthScripts(page);
+
+      // Start idle mouse jitter in stealth mode
+      if (browserMode === "stealth") {
+        startIdleMovement(page);
+      }
 
       const targetId = await getTargetId(page);
       entry = { page, targetId };
@@ -352,6 +381,7 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
 
       // Clean up registry when page is closed (e.g., user clicks X)
       page.on("close", () => {
+        stopIdleMovement(page);
         registry.delete(name);
       });
     }
@@ -439,6 +469,32 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     }
   });
 
+  // POST /pages/:name/resize - resize viewport using server's Page object
+  app.post("/pages/:name/resize", async (req: Request<{ name: string }>, res: Response) => {
+    const name = decodeURIComponent(req.params.name);
+    const entry = registry.get(name);
+
+    if (!entry) {
+      res.status(404).json({ error: `Page "${name}" not found` });
+      return;
+    }
+
+    try {
+      const { width, height } = req.body as { width: number; height: number };
+      if (!width || !height) {
+        res.status(400).json({ error: "width and height are required" });
+        return;
+      }
+      await entry.page.setViewportSize({ width, height });
+      const vp = entry.page.viewportSize();
+      console.log(`Resize "${name}" → ${vp?.width}x${vp?.height}`);
+      res.json({ success: true, width: vp?.width, height: vp?.height });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ error: msg });
+    }
+  });
+
   // GET /pages/:name/url - get current page URL from server's Page object
   app.get("/pages/:name/url", (req: Request<{ name: string }>, res: Response) => {
     const name = decodeURIComponent(req.params.name);
@@ -505,21 +561,64 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
       let clickedType = "";
       let clicked = false;
 
+      // Human mouse movement helper for stealth mode
+      const stealthMoveToLocator = async (locator: import("playwright").Locator) => {
+        if (browserMode !== "stealth") return;
+        try {
+          const center = await getElementCenter(locator);
+          await humanMouseMove(entry.page, center.x, center.y);
+          await new Promise(r => setTimeout(r, 50 + Math.random() * 100));
+        } catch { /* element may not be visible yet */ }
+      };
+
       // Try button role
-      try { await entry.page.getByRole("button", { name: target }).click({ timeout: 3000 }); clickedType = "button"; clicked = true; } catch {}
+      try { const loc = entry.page.getByRole("button", { name: target }); await stealthMoveToLocator(loc); await loc.click({ timeout: 3000 }); clickedType = "button"; clicked = true; } catch {}
       // Try link role
-      if (!clicked) { try { await entry.page.getByRole("link", { name: target }).click({ timeout: 3000 }); clickedType = "link"; clicked = true; } catch {} }
+      if (!clicked) { try { const loc = entry.page.getByRole("link", { name: target }); await stealthMoveToLocator(loc); await loc.click({ timeout: 3000 }); clickedType = "link"; clicked = true; } catch {} }
       // Try frames
       if (!clicked) {
         for (const frame of entry.page.frames()) {
           if (clicked) break;
-          try { await frame.getByRole("button", { name: target }).click({ timeout: 2000 }); clickedType = "button (frame)"; clicked = true; } catch {
-            try { await frame.getByRole("link", { name: target }).click({ timeout: 2000 }); clickedType = "link (frame)"; clicked = true; } catch {}
+          try { const loc = frame.getByRole("button", { name: target }); await loc.click({ timeout: 2000 }); clickedType = "button (frame)"; clicked = true; } catch {
+            try { const loc = frame.getByRole("link", { name: target }); await loc.click({ timeout: 2000 }); clickedType = "link (frame)"; clicked = true; } catch {}
           }
         }
       }
+      // Iframe coordinate-based click fallback (for reCAPTCHA/Turnstile checkboxes)
+      if (!clicked) {
+        try {
+          // Find iframes that contain matching text
+          for (const frame of entry.page.frames()) {
+            if (clicked) break;
+            try {
+              const hasText = await frame.locator(`text=${target}`).count();
+              if (hasText > 0) {
+                // Get the iframe element's bounding box from the parent page
+                const frameUrl = frame.url();
+                const iframeLoc = entry.page.locator(`iframe[src*="${new URL(frameUrl).hostname}"]`).first();
+                const iframeBox = await Promise.race([
+                  iframeLoc.boundingBox(),
+                  new Promise<null>((resolve) => setTimeout(() => resolve(null), 2000)),
+                ]);
+                if (iframeBox) {
+                  // Click near the checkbox area (typically ~28px from left, center vertically, capped at 28px from top)
+                  const clickX = iframeBox.x + 28;
+                  const clickY = iframeBox.y + Math.min(iframeBox.height / 2, 28);
+                  if (browserMode === "stealth") {
+                    await humanMouseMove(entry.page, clickX, clickY);
+                    await new Promise(r => setTimeout(r, 50 + Math.random() * 100));
+                  }
+                  await entry.page.mouse.click(clickX, clickY);
+                  clickedType = "iframe-coordinates";
+                  clicked = true;
+                }
+              }
+            } catch { /* frame may be detached */ }
+          }
+        } catch { /* ignore */ }
+      }
       // CSS selector fallback
-      if (!clicked) { await entry.page.locator(target).first().click({ timeout: 5000 }); clickedType = "selector"; }
+      if (!clicked) { const loc = entry.page.locator(target).first(); await stealthMoveToLocator(loc); await loc.click({ timeout: 5000 }); clickedType = "selector"; }
 
       try { await entry.page.waitForLoadState("domcontentloaded", { timeout: 5000 }); } catch {}
       const info = await entry.page.evaluate(() => ({
@@ -527,6 +626,25 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
         links: [...document.querySelectorAll("a")].slice(0, 5).map(a => a.textContent?.trim()).filter(Boolean),
       }));
       res.json({ clicked: target, type: clickedType, url: entry.page.url(), next: info });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // POST /pages/:name/mouse-click - click at viewport coordinates (for iframe content like CAPTCHAs)
+  app.post("/pages/:name/mouse-click", async (req: Request<{ name: string }>, res: Response) => {
+    const r = getPageEntry(req, res);
+    if (!r) return;
+    const { entry } = r;
+    try {
+      const { x, y } = req.body as { x: number; y: number };
+      if (typeof x !== "number" || typeof y !== "number") { res.status(400).json({ error: "x and y coordinates are required" }); return; }
+      if (browserMode === "stealth") {
+        await humanMouseMove(entry.page, x, y);
+        await new Promise(r => setTimeout(r, 50 + Math.random() * 100));
+      }
+      await entry.page.mouse.click(x, y);
+      res.json({ clicked: { x, y }, url: entry.page.url() });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
@@ -545,15 +663,25 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
       let filled = false;
       let filledWith = "";
 
+      // Human mouse movement helper for stealth mode
+      const stealthMoveToEl = async (el: import("playwright").Locator) => {
+        if (browserMode !== "stealth") return;
+        try {
+          const center = await getElementCenter(el);
+          await humanMouseMove(entry.page, center.x, center.y);
+          await new Promise(r => setTimeout(r, 50 + Math.random() * 100));
+        } catch { /* element may not be visible */ }
+      };
+
       if (looksLikeSelector) {
-        try { const el = entry.page.locator(target).first(); if (await el.count() > 0) { await el.fill(value); filledWith = target; filled = true; } } catch {}
+        try { const el = entry.page.locator(target).first(); if (await el.count() > 0) { await stealthMoveToEl(el); await el.fill(value); filledWith = target; filled = true; } } catch {}
       }
       if (!filled) {
         for (const sel of [`[name="${target}"]`, `#${target}`, `[placeholder*="${target}" i]`]) {
-          try { const el = entry.page.locator(sel).first(); if (await el.count() > 0) { await el.fill(value); filledWith = sel; filled = true; break; } } catch {}
+          try { const el = entry.page.locator(sel).first(); if (await el.count() > 0) { await stealthMoveToEl(el); await el.fill(value); filledWith = sel; filled = true; break; } } catch {}
         }
       }
-      if (!filled) { try { await entry.page.getByLabel(target).fill(value); filledWith = `label:${target}`; filled = true; } catch {} }
+      if (!filled) { try { const el = entry.page.getByLabel(target); await stealthMoveToEl(el); await el.fill(value); filledWith = `label:${target}`; filled = true; } catch {} }
       if (!filled) { res.status(404).json({ error: `Field '${target}' not found` }); return; }
 
       res.json({ filled: target, value, selector: filledWith });

@@ -45,12 +45,15 @@ try {
     }, code);
 
     if (result.success) {
-        if (result.result !== undefined && result.result !== null) {
+        // Always output the actual value, never hide it
+        if (result.result === undefined) {
+            console.log('undefined');
+        } else if (result.result === null) {
+            console.log('null');
+        } else if (typeof result.result === 'object') {
             console.log(JSON.stringify(result.result, null, 2));
-        } else if (result.type === 'undefined') {
-            console.log("✓ Executed (no return value)");
         } else {
-            console.log(JSON.stringify(result.result));
+            console.log(String(result.result));
         }
     } else {
         console.error("✗ Error:", result.error);

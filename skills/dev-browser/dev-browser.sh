@@ -134,11 +134,12 @@ case "$1" in
                 export SCREENSHOTS_DIR="$PROJECT_SCREENSHOTS_DIR"
                 export PROJECT_PREFIX=$(get_project_prefix)
                 shift # consume --screenshot
-                # Parse remaining args: [page] [filename] [--scroll-to <selector|pixels>]
-                _page="" _fname="" _scroll_to=""
+                # Parse remaining args: [page] [filename] [--scroll-to <sel|px>] [--selector <css>]
+                _page="" _fname="" _scroll_to="" _selector=""
                 while [[ $# -gt 0 ]]; do
                     case "$1" in
                         --scroll-to) _scroll_to="${2:-}"; shift 2 ;;
+                        --selector) _selector="${2:-}"; shift 2 ;;
                         --*) echo "WARNING: Unknown flag '$1' ignored" >&2; shift ;;
                         *) if [[ -z "$_page" ]]; then _page="$1"; elif [[ -z "$_fname" ]]; then _fname="$1"; else echo "WARNING: Unknown argument '$1' ignored" >&2; fi; shift ;;
                     esac
@@ -146,6 +147,7 @@ case "$1" in
                 [[ -n "$_page" ]] && PAGE_NAME="$_page" && export PAGE_NAME
                 export SCRIPT_ARGS="$_fname"
                 [[ -n "$_scroll_to" ]] && export SCROLL_TO="$_scroll_to"
+                [[ -n "$_selector" ]] && export SELECTOR_TARGET="$_selector"
                 export SERVER_PORT
                 cd "$DEV_BROWSER_DIR" && ./node_modules/.bin/tsx "$BUILTIN_SCRIPTS_DIR/screenshot.ts"
                 _exit=$?
@@ -220,7 +222,7 @@ case "$1" in
         ;;
 
     # Quick browsing commands (no --run prefix, agent-browser style)
-    goto|click|jsclick|text|fill|select|select-react|aria|eval|upload|dismiss-consent|scroll-to|dismiss-overlays|drag|extract)
+    goto|click|jsclick|text|fill|select|select-react|aria|eval|upload|dismiss-consent|scroll-to|dismiss-overlays|drag|extract|slide)
         source "$LIB_DIR/server.sh"
         source "$LIB_DIR/runscript.sh"
         start_server || exit 1

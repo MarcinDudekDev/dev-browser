@@ -26,21 +26,24 @@ Browser automation that maintains page state across script executions. Multi-ser
 
 ```bash
 # Quick commands (preferred - no --run prefix needed)
-dev-browser.sh goto https://example.com      # Navigate + inspect
-dev-browser.sh click "Submit"                # Click by text/ref/selector
-dev-browser.sh fill email test@example.com   # Fill form field
-dev-browser.sh select country US             # Select dropdown option
-dev-browser.sh text e5                       # Get text from ref/selector
-dev-browser.sh eval 'document.title'         # Evaluate JS in page
-dev-browser.sh scroll-to '.section'          # Scroll element into view
-dev-browser.sh aria                          # Get ARIA snapshot with refs
+dev-browser.sh goto https://example.com          # Navigate (outputs forms/buttons/links)
+dev-browser.sh fill "log=admin pwd=secret"       # Fill MULTIPLE fields at once
+dev-browser.sh fill email test@example.com       # Fill single field (by name, label, or ARIA)
+dev-browser.sh fill "Medium=on Bacon=on"         # Check radio/checkbox by label
+dev-browser.sh click "Submit"                    # Click by text/ref/selector
+dev-browser.sh select country US                 # Select dropdown option
+dev-browser.sh text e5                           # Get text from ref/selector
+dev-browser.sh eval 'document.title'             # Evaluate JS in page
+dev-browser.sh scroll-to '.section'              # Scroll element into view
+dev-browser.sh aria                              # Get ARIA snapshot with refs
 
 # Stealth mode (bypasses bot detection)
 dev-browser.sh --stealth goto https://allegro.pl
 
 # Screenshots (path is in OUTPUT - don't pass it!)
-dev-browser.sh --screenshot main
-dev-browser.sh --screenshot main myshot.png  # optional filename
+dev-browser.sh --screenshot main                              # full page
+dev-browser.sh --screenshot main --selector '.hero'           # element only
+dev-browser.sh --screenshot main --scroll-to '.faq-section'   # scroll + viewport
 
 # Tab management
 dev-browser.sh --tabs                        # List all tabs + registered pages
@@ -48,6 +51,52 @@ dev-browser.sh --cleanup                     # Close orphaned about:blank tabs
 dev-browser.sh --cleanup --all               # Close all unregistered tabs
 dev-browser.sh --cleanup --project marketing # Close specific project's page
 ```
+
+## Workflow: Use Built-in Commands First
+
+**For most tasks, built-in commands are all you need.** Each command outputs compact page state (URL, forms, buttons) so you can chain them without extra `--inspect` calls.
+
+### Example: WordPress Login in 3 Commands
+
+```bash
+dev-browser.sh goto https://site.com/wp-login.php
+# Output: URL, Title, Form #loginform: log[text], pwd[password], wp-submit[submit]
+
+dev-browser.sh fill "log=admin pwd=secret123"
+# Output: Filled: log, pwd | Form values shown
+
+dev-browser.sh click "Log In"
+# Output: URL: .../wp-admin/, Title: Dashboard
+```
+
+### Example: Complete Form (text + radio + checkbox + dropdown)
+
+```bash
+dev-browser.sh goto https://site.com/checkout
+dev-browser.sh fill "first_name=John last_name=Doe email=j@test.com Medium=on Bacon=on delivery=18:30"
+dev-browser.sh select country Poland
+dev-browser.sh click "Place Order"
+```
+
+`fill` auto-detects input type: text inputs get `.fill()`, checkboxes/radios get `.check()`, selects get `.selectOption()`. Use `=off` to uncheck: `Newsletter=off`.
+
+### Example: Values containing = (JSON mode)
+
+```bash
+dev-browser.sh fill '{"password":"P@ss=w0rd","comments":"token: abc=="}'
+```
+
+When values contain `=` that could be mistaken for key=value separators, use JSON format.
+
+### When to Use Scripts vs Commands
+
+| Situation | Use |
+|-----------|-----|
+| Navigate, fill, click, select | Built-in commands |
+| Need current form/button state | `goto` or `click` output (auto-included) |
+| Need detailed element tree | `--inspect` or `aria` |
+| Complex logic (loops, conditionals) | Custom script |
+| Multi-step evaluate() | Custom script |
 
 ## Browser Modes
 
@@ -98,7 +147,11 @@ dev-browser.sh goto https://example.com 2>&1
 # Quick commands
 dev-browser.sh goto <url>            # Navigate + auto-inspect
 dev-browser.sh click <text|ref>      # Click button/link
-dev-browser.sh fill <field> <value>  # Fill input by name/ref/label
+dev-browser.sh fill <field> <value>  # Fill input by name/label/ARIA
+dev-browser.sh fill "f1=v1 f2=v2"  # Fill multiple fields at once
+dev-browser.sh fill "Bacon=on"     # Check checkbox/radio by label
+dev-browser.sh fill '{"k":"v"}'   # JSON mode (values with = signs)
+dev-browser.sh slide <ref> <value>   # Set slider (click/keyboard)
 dev-browser.sh text <ref>            # Get element text
 dev-browser.sh aria                  # ARIA snapshot with refs
 
@@ -108,7 +161,9 @@ dev-browser.sh --scenario wp-login   # Run YAML scenario
 dev-browser.sh --chain "goto url|click Submit"
 
 # Inspection
-dev-browser.sh --screenshot main     # Take screenshot
+dev-browser.sh --screenshot main     # Full-page screenshot
+dev-browser.sh --screenshot main --selector '.hero'  # Element screenshot (clipped)
+dev-browser.sh --screenshot main --scroll-to '.faq'  # Scroll + viewport shot
 dev-browser.sh --inspect main        # Forms + ARIA snapshot
 dev-browser.sh --page-status main    # URL, title, state
 dev-browser.sh --console main        # Watch console (Ctrl+C to stop)
@@ -237,13 +292,25 @@ Save to `$DEV_BROWSER_HOME/scripts/{project}/script.ts`, run with `--run {projec
 - **Plain JS in evaluate()**: No TypeScript syntax in browser context
 
 ```typescript
-// Template - client and page are auto-injected!
+// Template - client, page, resolveField, smartFill are auto-injected!
 await page.goto("https://example.com");
 await waitForPageLoad(page);
-console.log({ title: await page.title(), url: page.url() });
+
+// resolveField: find any input by label/name/id (ARIA-first)
+const field = await resolveField(page, "Email");
+if (field) await smartFill(field, "test@x.com"); // auto-detects text/checkbox/radio/select
+
+// Or use the fill command instead of writing scripts:
+//   dev-browser.sh fill "Email=test@x.com Subscribe=on"
 ```
 
 Run with different pages: `dev-browser.sh -p checkout --run myscript`
+
+**Auto-injected globals** (available in all scripts without import):
+- `page`, `client` — Playwright page and client
+- `resolveField(page, target)` — ARIA-first field resolution (returns `{ locator, matchedBy }`)
+- `smartFill(resolved, value)` — Auto-detects input type: `.fill()` for text, `.check()` for checkbox/radio, `.selectOption()` for select
+- `waitForPageLoad`, `waitForElement`, `waitForElementGone`, `waitForCondition`, `waitForURL`, `waitForNetworkIdle`
 
 **Important:**
 - `tsx` transpiles but doesn't type-check - errors ignored
@@ -419,18 +486,37 @@ await new Promise(r => setTimeout(r, 5000)); // TODO: remove - just watching ani
 > ✅ RIGHT: Run command, use path from OUTPUT
 > ```
 
-**Via CLI:**
+**Full-page screenshot (default):**
 ```bash
 dev-browser.sh --screenshot main
 dev-browser.sh --screenshot main myshot.png  # optional filename
-# Output: Screenshot saved: /Users/.../screenshots/myshot.png
-#         USE THIS PATH from the output!
 ```
+
+**Element screenshot** — clips to a specific element's bounds:
+```bash
+dev-browser.sh --screenshot main --selector '.hero-section'
+dev-browser.sh --screenshot main --selector '#pricing-table'
+dev-browser.sh --screenshot main hero.png --selector '.hero'  # with filename
+```
+
+**Scroll-to screenshot** — scrolls to a section, then takes viewport-only shot:
+```bash
+dev-browser.sh --screenshot main --scroll-to '.faq-section'
+dev-browser.sh --screenshot main --scroll-to 3000  # scroll to pixel offset
+```
+
+| Flag | What it does | Best for |
+|------|-------------|----------|
+| *(none)* | Full-page screenshot | Whole page overview |
+| `--selector '.css'` | Element-level screenshot (auto-clips) | Specific component/section |
+| `--scroll-to '.css'` | Scroll + viewport screenshot | Area of page at current viewport size |
+| `--scroll-to 3000` | Scroll to pixel + viewport screenshot | Below-the-fold content |
 
 **Via script:**
 ```typescript
-await page.screenshot({ filename: "screenshot.png" });
-await page.screenshot({ filename: "full.png", fullPage: true });
+await page.screenshot({ path: "full.png", fullPage: true });
+// Element-level screenshot (auto-scrolls + clips to element):
+await page.locator('.hero-section').screenshot({ path: "hero.png" });
 ```
 
 ### ARIA Snapshot (Element Discovery)
@@ -489,12 +575,21 @@ Options: `timeout` (5000ms), `submit` (false), `clear` (true)
 
 ## Gotchas
 
+### Fill Resolution Order (ARIA-first)
+`fill` uses `resolveField` which searches in this order:
+1. **CSS passthrough** — target starts with `.`, `#`, `[` → used as raw selector
+2. **ARIA by role** — `getByRole(textbox|searchbox|spinbutton|combobox|checkbox|radio, { name: target })` — finds by accessible name in the a11y tree
+3. **Exact `[name="target"]`** — CSS attribute selector
+4. **Exact `#target`** — CSS ID selector
+
+This means `fill email test@x.com` finds the field by ARIA name first (matching labels like "Email Address"), then falls back to `name` attr, then `id`. No fuzzy matching.
+
 ### Tally Forms (UUID selectors)
 Tally forms use **random UUID `name` attributes** that change every session. Never use `input[name="uuid-here"]` selectors — they'll break next time.
 
-**Instead**, use label-based selection:
+**Instead**, use label-based selection (ARIA resolves labels automatically):
 ```bash
-dev-browser.sh fill "Your website" "https://example.com"  # by label text
+dev-browser.sh fill "Your website" "https://example.com"  # ARIA finds by label text
 dev-browser.sh fill e5 "https://example.com"               # by ARIA ref (run 'aria' first)
 ```
 
@@ -532,7 +627,7 @@ If a script fails, the page state is preserved. You can:
 Or write a debug script (`$DEV_BROWSER_HOME/scripts/{project}/debug.ts`):
 ```typescript
 // client and page auto-injected
-await page.screenshot({ filename: "debug.png" });
+await page.screenshot({ path: "debug.png" });
 console.log({
   url: page.url(),
   title: await page.title(),

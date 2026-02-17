@@ -9,6 +9,7 @@ const pageName = process.env.PAGE_NAME || "main";
 const prefix = process.env.PROJECT_PREFIX || "dev";
 const serverPort = process.env.SERVER_PORT || "9222";
 const scrollTo = process.env.SCROLL_TO || "";
+const selectorTarget = process.env.SELECTOR_TARGET || "";
 
 // Determine screenshot path
 const screenshotsDir = process.env.SCREENSHOTS_DIR || path.join(process.env.HOME || "/tmp", "Tools/screenshots");
@@ -56,10 +57,18 @@ if (scrollTo) {
     console.log(`Scrolled to: ${scrollTo}`);
 }
 
+// Build request body: selector overrides fullPage (element screenshot auto-clips)
+const screenshotBody: Record<string, any> = { path: screenshotPath };
+if (selectorTarget) {
+    screenshotBody.selector = selectorTarget;
+    console.log(`Element screenshot: ${selectorTarget}`);
+} else {
+    screenshotBody.fullPage = fullPage;
+}
 const res = await fetch(`${serverUrl}/pages/${encodeURIComponent(targetName)}/screenshot`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ path: screenshotPath, fullPage }),
+    body: JSON.stringify(screenshotBody),
 });
 
 const result = await res.json() as { success?: boolean; path?: string; url?: string; viewport?: string; error?: string };

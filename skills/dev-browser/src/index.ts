@@ -11,6 +11,7 @@ import type {
   ServerInfoResponse,
 } from "./types";
 import { humanMouseMove, getElementCenter, startIdleMovement, stopIdleMovement } from "./mouse-human";
+import { resolveField, smartFill } from "./resolve-field.js";
 
 export type { ServeOptions, GetPageResponse, ListPagesResponse, ServerInfoResponse };
 
@@ -423,13 +424,20 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     }
 
     try {
-      const { path: savePath, fullPage } = req.body as { path?: string; fullPage?: boolean };
+      const { path: savePath, fullPage, selector } = req.body as { path?: string; fullPage?: boolean; selector?: string };
       const screenshotPath = savePath || `/tmp/screenshot-${Date.now()}.png`;
-      await entry.page.screenshot({ path: screenshotPath, fullPage: fullPage !== false });
+      if (selector) {
+        // Element-level screenshot: scroll into view + clip to element bounds
+        const locator = entry.page.locator(selector).first();
+        await locator.scrollIntoViewIfNeeded({ timeout: 5000 });
+        await locator.screenshot({ path: screenshotPath });
+      } else {
+        await entry.page.screenshot({ path: screenshotPath, fullPage: fullPage !== false });
+      }
       const url = entry.page.url();
       const vp = entry.page.viewportSize() ?? await entry.page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight })).catch(() => null);
       const vpStr = vp ? `${vp.width}x${vp.height}` : 'unknown';
-      console.log(`Screenshot "${name}" → ${screenshotPath} (url=${url})`);
+      console.log(`Screenshot "${name}" → ${screenshotPath} (url=${url}${selector ? `, selector=${selector}` : ''})`);
       res.json({ success: true, path: screenshotPath, url, viewport: vpStr });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -533,17 +541,73 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
         const sep = url.includes("?") ? "&" : "?";
         url = `${url}${sep}v=${Date.now()}`;
       }
-      await entry.page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+      try {
+        await entry.page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+      } catch (navErr: any) {
+        // Fail fast on connection errors instead of waiting for full timeout
+        const msg = navErr?.message || "";
+        if (msg.includes("ERR_CONNECTION_REFUSED") || msg.includes("ERR_CONNECTION_RESET") || msg.includes("ERR_NAME_NOT_RESOLVED") || msg.includes("ERR_ADDRESS_UNREACHABLE")) {
+          res.status(502).json({ error: msg.split("\n")[0] });
+          return;
+        }
+        throw navErr;
+      }
       try { await entry.page.waitForLoadState("networkidle", { timeout: 10000 }); } catch { /* proceed */ }
 
-      const info = await entry.page.evaluate(() => {
-        const links = Array.from(document.querySelectorAll("a[href]"))
-          .map(a => ({ href: a.getAttribute("href") || "", text: (a.textContent?.trim() || "").substring(0, 50) }))
-          .filter(l => l.href && l.href !== "#" && !l.href.startsWith("javascript:") && !l.href.startsWith("mailto:"))
-          .slice(0, 15);
-        return { links };
+      const pageState = await entry.page.evaluate(() => {
+        const doc = document;
+        const lines: string[] = [];
+        // Forms summary
+        doc.querySelectorAll("form").forEach((form) => {
+          const id = form.id || form.getAttribute("name") || "(unnamed)";
+          const fields: string[] = [];
+          form.querySelectorAll("input, select, textarea").forEach((el) => {
+            const inp = el as HTMLInputElement;
+            const name = inp.name || inp.id || inp.placeholder || inp.type;
+            if (name && inp.type !== "hidden") fields.push(`${name}[${inp.type || el.tagName.toLowerCase()}]`);
+          });
+          if (fields.length > 0) lines.push(`Form #${id}: ${fields.join(", ")}`);
+        });
+        // Standalone inputs
+        const standalone: string[] = [];
+        doc.querySelectorAll("input:not(form input), select:not(form select), textarea:not(form textarea)").forEach((el) => {
+          const inp = el as HTMLInputElement;
+          const name = inp.name || inp.id || inp.placeholder || inp.type;
+          if (name && inp.type !== "hidden") standalone.push(`${name}[${inp.type || el.tagName.toLowerCase()}]`);
+        });
+        if (standalone.length > 0) lines.push(`Inputs: ${standalone.slice(0, 10).join(", ")}`);
+        // Buttons
+        const buttons: string[] = [];
+        doc.querySelectorAll('button, input[type="submit"], [role="button"]').forEach((el) => {
+          const text = (el.textContent || (el as HTMLInputElement).value || "").trim().substring(0, 30);
+          if (text && !buttons.includes(text)) buttons.push(text);
+        });
+        if (buttons.length > 0) lines.push(`Buttons: ${buttons.slice(0, 8).join(", ")}`);
+        // Iframes
+        const iframes = doc.querySelectorAll("iframe");
+        if (iframes.length > 0) {
+          const info = Array.from(iframes).slice(0, 5).map(f => {
+            const name = f.name || f.id || "";
+            const src = f.src?.substring(0, 60) || "";
+            return name ? `${name}(${src})` : src;
+          }).filter(Boolean);
+          if (info.length > 0) lines.push(`Iframes: ${info.join(", ")}`);
+        }
+        // Links
+        const links: string[] = [];
+        const seen = new Set<string>();
+        doc.querySelectorAll("a[href]").forEach((el) => {
+          const text = (el.textContent || "").trim().substring(0, 30);
+          const href = el.getAttribute("href") || "";
+          if (text && !seen.has(text) && href !== "#" && !href.startsWith("javascript:") && !href.startsWith("mailto:")) {
+            seen.add(text);
+            links.push(text);
+          }
+        });
+        if (links.length > 0) lines.push(`Links: ${links.slice(0, 15).join(", ")}`);
+        return lines.join("\n");
       });
-      res.json({ url: entry.page.url(), title: await entry.page.title(), ...info });
+      res.json({ url: entry.page.url(), title: await entry.page.title(), state: pageState });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
@@ -621,11 +685,28 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
       if (!clicked) { const loc = entry.page.locator(target).first(); await stealthMoveToLocator(loc); await loc.click({ timeout: 5000 }); clickedType = "selector"; }
 
       try { await entry.page.waitForLoadState("domcontentloaded", { timeout: 5000 }); } catch {}
-      const info = await entry.page.evaluate(() => ({
-        buttons: [...document.querySelectorAll("button")].slice(0, 5).map(b => b.textContent?.trim()).filter(Boolean),
-        links: [...document.querySelectorAll("a")].slice(0, 5).map(a => a.textContent?.trim()).filter(Boolean),
-      }));
-      res.json({ clicked: target, type: clickedType, url: entry.page.url(), next: info });
+      const clickState = await entry.page.evaluate(() => {
+        const doc = document;
+        const lines: string[] = [];
+        doc.querySelectorAll("form").forEach((form) => {
+          const id = form.id || form.getAttribute("name") || "(unnamed)";
+          const fields: string[] = [];
+          form.querySelectorAll("input, select, textarea").forEach((el) => {
+            const inp = el as HTMLInputElement;
+            const name = inp.name || inp.id || inp.placeholder || inp.type;
+            if (name && inp.type !== "hidden") fields.push(`${name}[${inp.type || el.tagName.toLowerCase()}]`);
+          });
+          if (fields.length > 0) lines.push(`Form #${id}: ${fields.join(", ")}`);
+        });
+        const buttons: string[] = [];
+        doc.querySelectorAll('button, input[type="submit"], [role="button"]').forEach((el) => {
+          const text = (el.textContent || (el as HTMLInputElement).value || "").trim().substring(0, 30);
+          if (text && !buttons.includes(text)) buttons.push(text);
+        });
+        if (buttons.length > 0) lines.push(`Buttons: ${buttons.slice(0, 8).join(", ")}`);
+        return lines.join("\n");
+      });
+      res.json({ clicked: target, type: clickedType, url: entry.page.url(), title: await entry.page.title(), state: clickState });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
@@ -659,7 +740,6 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
       const { target, value } = req.body as { target: string; value: string };
       if (!target || value === undefined) { res.status(400).json({ error: "target and value are required" }); return; }
 
-      const looksLikeSelector = /^[a-z]+\[|^\[|^#|^\./.test(target);
       let filled = false;
       let filledWith = "";
 
@@ -673,18 +753,38 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
         } catch { /* element may not be visible */ }
       };
 
-      if (looksLikeSelector) {
-        try { const el = entry.page.locator(target).first(); if (await el.count() > 0) { await stealthMoveToEl(el); await el.fill(value); filledWith = target; filled = true; } } catch {}
-      }
-      if (!filled) {
-        for (const sel of [`[name="${target}"]`, `#${target}`, `[placeholder*="${target}" i]`]) {
-          try { const el = entry.page.locator(sel).first(); if (await el.count() > 0) { await stealthMoveToEl(el); await el.fill(value); filledWith = sel; filled = true; break; } } catch {}
-        }
-      }
-      if (!filled) { try { const el = entry.page.getByLabel(target); await stealthMoveToEl(el); await el.fill(value); filledWith = `label:${target}`; filled = true; } catch {} }
-      if (!filled) { res.status(404).json({ error: `Field '${target}' not found` }); return; }
+      const resolved = await resolveField(entry.page, target);
+      if (!resolved) { res.status(404).json({ error: `Field '${target}' not found` }); return; }
+      await stealthMoveToEl(resolved.locator);
+      const action = await smartFill(resolved, value);
+      filledWith = `${resolved.matchedBy} (${action})`; filled = true;
 
-      res.json({ filled: target, value, selector: filledWith });
+      // Include current form values in response
+      const fillState = await entry.page.evaluate(() => {
+        const doc = document;
+        const lines: string[] = [];
+        doc.querySelectorAll("form").forEach((form) => {
+          const id = form.id || form.getAttribute("name") || "(unnamed)";
+          const fields: string[] = [];
+          form.querySelectorAll("input, select, textarea").forEach((el) => {
+            const inp = el as HTMLInputElement;
+            const name = inp.name || inp.id || inp.placeholder || inp.type;
+            if (name && inp.type !== "hidden") {
+              const val = inp.value ? ` ="${inp.value.substring(0, 20)}"` : "";
+              fields.push(`${name}[${inp.type || el.tagName.toLowerCase()}]${val}`);
+            }
+          });
+          if (fields.length > 0) lines.push(`Form #${id}: ${fields.join(", ")}`);
+        });
+        const buttons: string[] = [];
+        doc.querySelectorAll('button, input[type="submit"], [role="button"]').forEach((el) => {
+          const text = (el.textContent || (el as HTMLInputElement).value || "").trim().substring(0, 30);
+          if (text && !buttons.includes(text)) buttons.push(text);
+        });
+        if (buttons.length > 0) lines.push(`Buttons: ${buttons.slice(0, 8).join(", ")}`);
+        return lines.join("\n");
+      });
+      res.json({ filled: target, value, selector: filledWith, state: fillState });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
@@ -698,9 +798,26 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     try {
       const { target, value } = req.body as { target: string; value: string };
       if (!target || !value) { res.status(400).json({ error: "target and value are required" }); return; }
-      const sel = /^[.#\[]/.test(target) ? target : `[name="${target}"], #${target}`;
-      await entry.page.locator(sel).first().selectOption(value);
-      res.json({ selected: target, value });
+
+      let selected = false;
+      let selectedWith = "";
+
+      // Try select-specific CSS selectors first
+      if (/^[.#\[]/.test(target)) {
+        try { const el = entry.page.locator(target).first(); if (await el.count() > 0) { await el.selectOption(value); selectedWith = target; selected = true; } } catch {}
+      }
+      if (!selected) {
+        for (const sel of [`select[name="${target}"]`, `select#${target}`]) {
+          try { const el = entry.page.locator(sel).first(); if (await el.count() > 0) { await el.selectOption(value); selectedWith = sel; selected = true; break; } } catch {}
+        }
+      }
+      if (!selected) {
+        const resolved = await resolveField(entry.page, target);
+        if (resolved) { await resolved.locator.selectOption(value); selectedWith = resolved.matchedBy; selected = true; }
+      }
+      if (!selected) { res.status(404).json({ error: `Select element '${target}' not found` }); return; }
+
+      res.json({ selected: target, value, selector: selectedWith });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }

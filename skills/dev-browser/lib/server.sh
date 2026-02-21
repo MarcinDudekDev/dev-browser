@@ -1,56 +1,56 @@
 #!/bin/bash
 # Server management functions - multi-server support (one per mode)
 
-# Cleanup orphaned about:blank tabs (silent, runs in background)
-# Only closes blank tabs NOT tracked by the server registry
+# Cleanup ALL orphaned tabs not tracked by the server registry (runs in background)
 cleanup_orphaned_tabs() {
     {
     # Wait for any pending page creation to complete
     sleep 2
 
     # Get CDP tab list and server registry
-    cdp_json=$(curl -s --connect-timeout 1 "http://localhost:$CDP_PORT/json/list" 2>/dev/null) || exit 0
-    registry_json=$(curl -s --connect-timeout 1 "http://localhost:$SERVER_PORT/pages" 2>/dev/null) || exit 0
+    cdp_json=$(curl -s --connect-timeout 1 -m 3 "http://localhost:$CDP_PORT/json/list" 2>/dev/null) || exit 0
+    registry_json=$(curl -s --connect-timeout 1 -m 3 "http://localhost:$SERVER_PORT/pages" 2>/dev/null) || exit 0
 
-    # Cross-reference: only close blank tabs not in registry
-    echo "$cdp_json" | python3 -c "
+    # Close ALL tabs not in registry (not just about:blank)
+    # Re-checks registry before each close to avoid race with page creation
+    python3 -c "
 import sys, json, urllib.request
 
 try:
-    tabs = json.load(sys.stdin)
+    tabs = json.loads('''$cdp_json''')
 except:
     sys.exit(0)
 
-# Get registered page count (if registry has pages, be conservative)
-try:
-    registry = json.loads('$registry_json')
-    registered_count = len(registry.get('pages', []))
-except:
-    registered_count = 0
+server_port = '$SERVER_PORT'
+cdp_port = '$CDP_PORT'
 
-blank = [t for t in tabs if t.get('url','').startswith('about:blank')]
-if not blank:
-    sys.exit(0)
+def get_registered_targets():
+    try:
+        data = urllib.request.urlopen(f'http://localhost:{server_port}/pages', timeout=2).read()
+        registry = json.loads(data)
+        return set(registry.get('targets', {}).values())
+    except:
+        return None  # server unreachable, abort cleanup
 
-# If we have registered pages, leave at least that many blank tabs alone
-# (they might be freshly created pages awaiting navigation)
-if registered_count > 0 and len(blank) <= registered_count:
-    sys.exit(0)
-
-# Only close excess blank tabs (those clearly not registered)
-excess = blank[registered_count:] if registered_count > 0 else blank
 closed = 0
-for t in excess:
-    target_id = t.get('id')
-    if target_id:
-        try:
-            urllib.request.urlopen(f'http://localhost:$CDP_PORT/json/close/{target_id}', timeout=1)
-            closed += 1
-        except:
-            pass
+for t in tabs:
+    tid = t.get('id', '')
+    if not tid:
+        continue
+    # Re-check registry before EACH close (prevents race with page creation)
+    protected = get_registered_targets()
+    if protected is None:
+        break  # server gone, stop
+    if tid in protected:
+        continue
+    try:
+        urllib.request.urlopen(f'http://localhost:{cdp_port}/json/close/{tid}', timeout=1)
+        closed += 1
+    except:
+        pass
 
 if closed > 0:
-    print(f'Cleaned up {closed} orphaned tabs', file=sys.stderr)
+    print(f'Cleaned up {closed} orphaned tab(s)', file=sys.stderr)
 " 2>&1
     } &
 }
@@ -64,7 +64,18 @@ start_server() {
 
     if check_server_health; then
         log_debug "Server already healthy for mode $mode"
-        cleanup_orphaned_tabs
+        # Fix stale PID file: find actual process listening on our port
+        local actual_pid=$(lsof -ti:$SERVER_PORT -sTCP:LISTEN 2>/dev/null | head -1)
+        if [[ -n "$actual_pid" ]]; then
+            local file_pid=$(cat "$SERVER_PID_FILE" 2>/dev/null)
+            if [[ "$actual_pid" != "$file_pid" ]]; then
+                log_debug "Fixing stale PID file: $file_pid -> $actual_pid"
+                printf '%s' "$actual_pid" > "$SERVER_PID_FILE"
+            fi
+        fi
+        # NOTE: Do NOT run cleanup_orphaned_tabs here. It was spawning a background
+        # process on EVERY command invocation, causing races that closed active pages.
+        # Cleanup only runs on new server start (below) or explicit --cleanup.
         return 0
     fi
 
@@ -84,7 +95,7 @@ start_server() {
     cd "$DEV_BROWSER_DIR" || exit 1
 
     # Pass browser mode and ports to server
-    nohup env BROWSER_MODE="$mode" HTTP_PORT="$SERVER_PORT" CDP_PORT="$CDP_PORT" ./server.sh > "$SERVER_LOG" 2>&1 &
+    nohup env BROWSER_MODE="$mode" HTTP_PORT="$SERVER_PORT" CDP_PORT="$CDP_PORT" DEV_BROWSER_HOME="$DEV_BROWSER_HOME" ./server.sh > "$SERVER_LOG" 2>&1 &
     local pid=$!
     echo $pid > "$SERVER_PID_FILE"
     log_debug "Server started with PID $pid"
@@ -109,7 +120,7 @@ start_server() {
         fi
     done
 
-    log_debug "Server ready after ${count}s"
+    log_debug "Server ready after ~$((count * 3 / 10))s"
     echo "Server ready on port $SERVER_PORT" >&2
 
     # Cleanup orphaned tabs in background
@@ -170,15 +181,15 @@ server_status() {
         local status="NOT RUNNING"
         local pages=""
 
-        if [[ -f "$SERVER_PID_FILE" ]]; then
+        if check_server_health; then
+            local pid=$(lsof -ti:$SERVER_PORT -sTCP:LISTEN 2>/dev/null | head -1)
+            pid="${pid:-$(cat "$SERVER_PID_FILE" 2>/dev/null)}"
+            status="RUNNING (PID $pid, port $SERVER_PORT)"
+            pages=$(curl -s -m 2 "http://localhost:$SERVER_PORT/pages" 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); pages=d.get('pages',[]); print(f'{len(pages)} pages')" 2>/dev/null)
+        elif [[ -f "$SERVER_PID_FILE" ]]; then
             local pid=$(cat "$SERVER_PID_FILE")
             if kill -0 "$pid" 2>/dev/null; then
-                if check_server_health; then
-                    status="RUNNING (PID $pid, port $SERVER_PORT)"
-                    pages=$(curl -s "http://localhost:$SERVER_PORT/pages" 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); pages=d.get('pages',[]); print(f'{len(pages)} pages')" 2>/dev/null)
-                else
-                    status="UNHEALTHY (PID $pid)"
-                fi
+                status="UNHEALTHY (PID $pid)"
             fi
         fi
 

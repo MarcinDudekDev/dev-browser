@@ -1,43 +1,134 @@
 #!/bin/bash
-# Dev-browser wrapper - modular version (v1.4.1 - improved timeouts)
-# Usage: dev-browser.sh [options] [script.ts]
-#
-# ╔════════════════════════════════════════════════════════════════════════════╗
-# ║  ⚠️  SCREENSHOT USAGE - READ THIS FIRST!                                   ║
-# ╠════════════════════════════════════════════════════════════════════════════╣
-# ║  ❌ NEVER pass a path:    --screenshot main /tmp/shot.png                  ║
-# ║  ❌ NEVER chain with &&:  --screenshot main && Read(...)                   ║
-# ║  ❌ NEVER guess paths:    Read("/Users/.../screenshots/main.png")          ║
-# ║                                                                            ║
-# ║  ✅ CORRECT: Run the command, READ THE OUTPUT for the actual path          ║
-# ║     Example: --screenshot main                                             ║
-# ║     Output:  Screenshot saved: /Users/.../screenshot_main_1705123456.png   ║
-# ║     Then:    Use that RETURNED path with Read()                            ║
-# ╚════════════════════════════════════════════════════════════════════════════╝
-#
-# ╔════════════════════════════════════════════════════════════════════════════╗
-# ║  ⚠️  AVOID SLEEP PATTERNS - USE EVENT-BASED WAITING!                       ║
-# ╠════════════════════════════════════════════════════════════════════════════╣
-# ║  ❌ BAD:  sleep 3 && dev-browser.sh click 'Submit'                         ║
-# ║  ❌ BAD:  sleep 5; dev-browser.sh --screenshot main                        ║
-# ║                                                                            ║
-# ║  ✅ GOOD: Use event-based waiting in your scripts:                         ║
-# ║     await waitForElement(page, '.success-message');                        ║
-# ║     await waitForURL(page, /success/);                                     ║
-# ║     await waitForNetworkIdle(page);                                        ║
-# ║     await waitForCondition(page, () => document.querySelector('.done'));   ║
-# ║                                                                            ║
-# ║  Sleep + command chains cause backgrounding and timeout issues.            ║
-# ╚════════════════════════════════════════════════════════════════════════════╝
-#
-# Modes:      --dev (default) | --stealth (anti-fingerprint) | --user (main browser)
-# Server:     --server | --stop [--all] | --status (multi-server: each mode runs independently)
-# Quick:      goto <url> | click <ref> | jsclick <ref> | fill <ref> <text> | select <ref> <value> | text <ref> | aria | scroll-to <selector> | eval <js>
-# Screenshots: --screenshot | --snap | --diff | --baselines | --responsive | --resize
-# Inspect:    --inspect | --page-status | --console | --console-snapshot | --styles | --element | --annotate | --watch-design
-# Scripts:    --run <name> | --chain "cmd|cmd" | --list | --scenario | --scenarios
-# Diagnostics: --debug | --crashes | --tabs | --cleanup [--all | --project <prefix>]
-# Other:      --wplogin | --setup-brave | --help
+# Dev-browser wrapper - modular version (v1.5.0 - self-documenting)
+# Run with --help for full man-page reference.
+
+show_help() {
+cat <<'HELPEOF'
+NAME
+    dev-browser — browser automation with persistent page state
+
+SYNOPSIS
+    dev-browser.sh <command> [args]         Quick commands
+    dev-browser.sh --<flag> [page] [args]   Inspection/screenshot commands
+    dev-browser.sh --run <script> [args]    Custom TypeScript scripts
+
+RULES
+    1. Screenshot path is in OUTPUT. Run command, read the path, then Read() it.
+       Never pass a path. Never chain with &&. Never guess.
+    2. Never use sleep or setTimeout. Use event-based waits in scripts.
+    3. Never add 2>&1. Stdout/stderr are handled correctly.
+    4. Never declare client/page in scripts. They are auto-injected.
+    5. Recon first. Never guess selectors. Use: goto -> aria -> --inspect -> screenshot.
+    6. One command per Bash() call. Do not chain with && or ;.
+    7. If broken after 1 retry: msg tools "dev-browser issue: <description>"
+
+COMMANDS
+    goto <url>                 Navigate and inspect (forms, buttons, links)
+    click <text|ref|selector>  Click element (text match, ARIA ref, or CSS)
+    fill "f1=v1 f2=v2"        Fill form fields (auto-detects text/checkbox/radio/select)
+    fill '{"f":"v"}'           Fill with JSON (for values containing =)
+    select <field> <value>     Select dropdown option
+    text <ref|selector>        Get element text content
+    eval '<js>'                Execute JavaScript in page
+    aria                       ARIA accessibility tree with [ref=eN]
+    scroll-to <selector>       Scroll element into view
+    upload <selector> <path>   Upload file (searches iframes)
+    dismiss-consent            Close GDPR/cookie overlays
+
+INSPECTION
+    --screenshot <page>                     Full-page screenshot
+    --screenshot <page> --selector '.css'   Element screenshot (clipped)
+    --screenshot <page> --scroll-to '.css'  Scroll + viewport screenshot
+    --inspect <page>                        Forms + ARIA snapshot with refs
+    --page-status <page>                    URL/title + page messages
+    --console-snapshot <page>               Console messages
+    --annotate <page>                       Screenshot with ref labels + bounding boxes
+    --responsive <page>                     4 viewport screenshots + overflow check
+    --resize <WxH> [page]                   Resize viewport
+    --styles <selector> [page]              CSS cascade inspector
+    --element <ref|selector> [page]         Full element inspection
+
+SERVER
+    --server                   Start server for current mode
+    --stop [--all]             Stop server(s)
+    --status                   Show all server states
+
+MODES
+    --dev       Default mode (normal testing)
+    --stealth   Anti-fingerprint (bypasses bot detection)
+    --user      Your real browser session (requires --setup-brave first)
+    Mode persists across commands. First --stealth sets mode until --dev resets.
+
+FLAGS
+    -p <page>     Target page name (default: "main")
+    --cachebust   Add cache-busting query param
+    -q            Suppress console error output
+    --force       Force click on hidden elements
+
+SCRIPTS
+    --run <name>              Run custom TypeScript script
+    --chain "cmd|cmd|cmd"     Chain commands
+    --list                    List available scripts
+    --scenario <name>         Run YAML scenario
+    --scenarios               List available scenarios
+
+    Auto-injected globals (no imports needed):
+      page, client, resolveField, smartFill
+      waitForPageLoad, waitForElement, waitForElementGone
+      waitForCondition, waitForURL, waitForNetworkIdle
+
+    Rules: plain JS in evaluate(). Use -p flag for page names.
+
+DIAGNOSTICS
+    --tabs                    List all browser tabs
+    --cleanup [--all]         Close orphaned tabs
+    --cleanup --project <n>   Close specific project page
+    --debug                   Show debug log
+    --crashes                 Show crash logs
+    --wplogin <url>           WordPress auto-login (admin/admin123)
+    --setup-brave             Show user-mode setup instructions
+
+OUTPUT FORMATS
+    goto       -> URL: <url> / Title: <title> / <pageState>
+    click      -> Clicked <type>: <target> / URL: ... / Title: ... / <pageState>
+    fill       -> Filled: f1, f2 / <pageState>  |  Not found: f (stderr, exit 1)
+    screenshot -> Screenshot saved: /full/path/to/file.png
+    inspect    -> Forms + ARIA refs (e1, e2, ... for use with click/text)
+
+ERRORS
+    ECONNREFUSED/ECONNRESET    Server crashed. Auto-retries once.
+                               Fix: --stop --all && --server
+    Cannot redeclare client    Remove connect()/page()/disconnect() from script
+    Page 'X' not found         Navigate first: goto <url>
+    Field 'X' not found        Wrong name. Use --inspect or aria
+    browser-dead               Chrome crashed: --stop --all && --server
+HELPEOF
+}
+
+show_cheatsheet() {
+cat <<'CHEATEOF'
+RULES (dev-browser.sh):
+  1. One command per Bash() call. Never chain with && or ;
+  2. Screenshot path is in OUTPUT — read it, then Read() the file
+  3. Never use sleep/setTimeout. Never add 2>&1
+  4. Never declare client/page in scripts (auto-injected)
+  5. Recon first: goto -> read output -> act
+
+RECIPES:
+  Navigate:           dev-browser.sh goto <url>
+  Screenshot page:    dev-browser.sh --screenshot main
+  Screenshot element: dev-browser.sh --screenshot main --selector 'footer'
+  Screenshot scroll:  dev-browser.sh --screenshot main --scroll-to '.section'
+  Fill form:          dev-browser.sh fill "user=admin pass=secret"
+  Click:              dev-browser.sh click "Submit"
+  Inspect:            dev-browser.sh --inspect main
+  ARIA tree:          dev-browser.sh aria
+
+Full reference: dev-browser.sh --help
+CHEATEOF
+}
+
+# Legacy header kept minimal - see show_help() for full reference
 
 # Resolve script location (follow symlinks)
 SOURCE="${BASH_SOURCE[0]}"
@@ -211,7 +302,13 @@ case "$1" in
 
     # Help
     --help|-h)
-        head -10 "$0" | tail -8
+        show_help
+        exit 0
+        ;;
+
+    # Cheatsheet (short version for hook injection)
+    --cheatsheet)
+        show_cheatsheet
         exit 0
         ;;
 

@@ -24,6 +24,11 @@ async function forceClickElement(el: any) {
     });
 }
 
+// Auto-accept JS dialogs (confirm/alert/prompt) so clicks don't crash
+page.on('dialog', async (dialog: any) => {
+    await dialog.accept();
+});
+
 // Check if target is an ARIA ref (e.g., e1, e5, e123)
 const isRef = /^e\d+$/.test(target);
 
@@ -39,12 +44,35 @@ if (isRef) {
             await element.click();
         }
         await waitForPageLoad(page);
-        // Compact output
-        const info = await page.evaluate(() => ({
-            buttons: [...document.querySelectorAll('button')].slice(0,5).map(b => b.textContent?.trim()).filter(Boolean),
-            links: [...document.querySelectorAll('a')].slice(0,5).map(a => a.textContent?.trim()).filter(Boolean)
-        }));
-        console.log(JSON.stringify({ clicked: target, type: "ref", url: page.url(), next: info }));
+        // Compact page state output
+        console.log(`Clicked ref: ${target}`);
+        const state = await page.evaluate(() => {
+          const doc = document;
+          const lines: string[] = [];
+          lines.push(`URL: ${location.href}`);
+          lines.push(`Title: ${doc.title}`);
+          const forms = doc.querySelectorAll("form");
+          forms.forEach((form) => {
+            const id = form.id || form.getAttribute("name") || "(unnamed)";
+            const fields: string[] = [];
+            form.querySelectorAll("input, select, textarea").forEach((el) => {
+              const inp = el as HTMLInputElement;
+              const name = inp.name || inp.id || inp.placeholder || inp.type;
+              if (name && inp.type !== "hidden") {
+                fields.push(`${name}[${inp.type || el.tagName.toLowerCase()}]`);
+              }
+            });
+            if (fields.length > 0) lines.push(`Form #${id}: ${fields.join(", ")}`);
+          });
+          const buttons: string[] = [];
+          doc.querySelectorAll('button, input[type="submit"], [role="button"]').forEach((el) => {
+            const text = (el.textContent || (el as HTMLInputElement).value || "").trim().substring(0, 30);
+            if (text && !buttons.includes(text)) buttons.push(text);
+          });
+          if (buttons.length > 0) lines.push(`Buttons: ${buttons.slice(0, 8).join(", ")}`);
+          return lines.join("\n");
+        });
+        console.log(state);
     } catch (e: any) {
         console.error(JSON.stringify({ error: `Ref '${target}' not found. Run 'aria' to see available refs.` }));
         process.exit(1);
@@ -116,10 +144,33 @@ if (isRef) {
         clickedType = "selector";
     }
     await waitForPageLoad(page);
-    // Compact output
-    const info = await page.evaluate(() => ({
-        buttons: [...document.querySelectorAll('button')].slice(0,5).map(b => b.textContent?.trim()).filter(Boolean),
-        links: [...document.querySelectorAll('a')].slice(0,5).map(a => a.textContent?.trim()).filter(Boolean)
-    }));
-    console.log(JSON.stringify({ clicked: target, type: clickedType, url: page.url(), next: info }));
+    // Compact page state output
+    console.log(`Clicked ${clickedType}: ${target}`);
+    const state = await page.evaluate(() => {
+      const doc = document;
+      const lines: string[] = [];
+      lines.push(`URL: ${location.href}`);
+      lines.push(`Title: ${doc.title}`);
+      const forms = doc.querySelectorAll("form");
+      forms.forEach((form) => {
+        const id = form.id || form.getAttribute("name") || "(unnamed)";
+        const fields: string[] = [];
+        form.querySelectorAll("input, select, textarea").forEach((el) => {
+          const inp = el as HTMLInputElement;
+          const name = inp.name || inp.id || inp.placeholder || inp.type;
+          if (name && inp.type !== "hidden") {
+            fields.push(`${name}[${inp.type || el.tagName.toLowerCase()}]`);
+          }
+        });
+        if (fields.length > 0) lines.push(`Form #${id}: ${fields.join(", ")}`);
+      });
+      const buttons: string[] = [];
+      doc.querySelectorAll('button, input[type="submit"], [role="button"]').forEach((el) => {
+        const text = (el.textContent || (el as HTMLInputElement).value || "").trim().substring(0, 30);
+        if (text && !buttons.includes(text)) buttons.push(text);
+      });
+      if (buttons.length > 0) lines.push(`Buttons: ${buttons.slice(0, 8).join(", ")}`);
+      return lines.join("\n");
+    });
+    console.log(state);
 }

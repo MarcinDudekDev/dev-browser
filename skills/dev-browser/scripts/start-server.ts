@@ -5,9 +5,10 @@ import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const tmpDir = join(__dirname, "..", "tmp");
+const devBrowserHome = process.env.DEV_BROWSER_HOME || join(process.env.HOME || "/tmp", ".dev-browser");
+const tmpDir = join(devBrowserHome, "tmp");
 const browserModeForProfile = process.env.BROWSER_MODE || "dev";
-const profileDir = join(__dirname, "..", "profiles", browserModeForProfile);
+const profileDir = join(devBrowserHome, "profiles", browserModeForProfile);
 const crashLogFile = join(tmpDir, `crash-${browserModeForProfile}.log`);
 const sessionFile = join(tmpDir, `sessions-${browserModeForProfile}.json`);
 
@@ -77,15 +78,20 @@ function findPackageManager(): { name: string; command: string } | null {
   return null;
 }
 
-function isChromiumInstalled(): boolean {
+function getPlaywrightCacheDir(): string {
   const homeDir = process.env.HOME || process.env.USERPROFILE || "";
-  const playwrightCacheDir = join(homeDir, ".cache", "ms-playwright");
-
-  if (!existsSync(playwrightCacheDir)) {
-    return false;
+  // Playwright uses ~/Library/Caches/ms-playwright on macOS, ~/.cache/ms-playwright on Linux/Windows
+  if (process.platform === "darwin") {
+    return join(homeDir, "Library", "Caches", "ms-playwright");
   }
+  return join(homeDir, ".cache", "ms-playwright");
+}
 
-  // Check for chromium directories (e.g., chromium-1148, chromium_headless_shell-1148)
+function isChromiumInstalled(): boolean {
+  const playwrightCacheDir = getPlaywrightCacheDir();
+
+  if (!existsSync(playwrightCacheDir)) return false;
+
   try {
     const entries = readdirSync(playwrightCacheDir);
     return entries.some((entry) => entry.startsWith("chromium"));
@@ -133,15 +139,21 @@ try {
 }
 
 // Clean up stale CDP port if HTTP server isn't running (crash recovery)
-// Port numbers are validated integers, safe for shell use
+// Use netstat (fast) instead of lsof (hangs on macOS)
 try {
-  const pid = execSync(`lsof -ti:${startupCdpPort}`, { encoding: "utf-8" }).trim();
-  if (pid) {
-    console.log(`Cleaning up stale Chrome process on CDP port ${startupCdpPort} (PID: ${pid})`);
-    execSync(`kill -9 ${pid}`);
+  const listening = execSync(
+    `netstat -anp tcp 2>/dev/null | grep '\\.${startupCdpPort} ' | grep LISTEN`,
+    { encoding: "utf-8", timeout: 3000 }
+  ).trim();
+  if (listening) {
+    console.log(`Stale process detected on CDP port ${startupCdpPort}, attempting cleanup...`);
+    // Try to kill via fuser (available on most systems) as lsof hangs on macOS
+    try {
+      execSync(`kill -9 $(fuser ${startupCdpPort}/tcp 2>/dev/null) 2>/dev/null`, { timeout: 3000 });
+    } catch { /* best effort */ }
   }
 } catch {
-  // No process on CDP port, which is expected
+  // No process on CDP port — expected
 }
 
 // Check for previous crash and notify
@@ -189,34 +201,6 @@ console.log(`\nPress Ctrl+C to stop`);
 
 // Save initial session info
 saveSessionInfo({ pages: [], startedAt: new Date().toISOString() });
-
-// Log restored sessions after crash recovery
-async function logRestoredSessions() {
-  try {
-    // Wait for Chrome to restore sessions
-    await new Promise(r => setTimeout(r, 3000));
-
-    const res = await fetch(`http://localhost:${httpPort}/pages`);
-    if (!res.ok) return;
-
-    const data = await res.json() as { pages: string[] };
-    if (data.pages.length > 0) {
-      console.log(`Sessions restored: ${data.pages.length} pages active`);
-      data.pages.forEach(p => console.log(`  - ${p}`));
-
-      // Update session tracking
-      saveSessionInfo({
-        pages: data.pages,
-        startedAt: new Date().toISOString(),
-      });
-    }
-  } catch {
-    // Non-fatal
-  }
-}
-
-// Check for restored sessions in background
-logRestoredSessions();
 
 // Periodic page tracking (for crash recovery info)
 const pageTracker = setInterval(async () => {

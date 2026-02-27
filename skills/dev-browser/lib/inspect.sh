@@ -6,7 +6,7 @@ cmd_inspect() {
     start_server || return 1
     local PREFIX=$(get_project_prefix)
 
-    cd "$DEV_BROWSER_DIR" && ./node_modules/.bin/tsx <<INSPECT_SCRIPT
+    cd "$DEV_BROWSER_DIR" && run_ts <<INSPECT_SCRIPT
 import { connect } from "@/client.js";
 
 const client = await connect("http://localhost:${SERVER_PORT}");
@@ -100,7 +100,7 @@ cmd_page_status() {
     start_server || return 1
     local PREFIX=$(get_project_prefix)
 
-    cd "$DEV_BROWSER_DIR" && ./node_modules/.bin/tsx <<STATUS_SCRIPT
+    cd "$DEV_BROWSER_DIR" && run_ts <<STATUS_SCRIPT
 import { connect } from "@/client.js";
 
 const client = await connect("http://localhost:${SERVER_PORT}");
@@ -165,7 +165,7 @@ cmd_console() {
         echo "Watching console for page '${page_name}' (Ctrl+C to stop)..." >&2
     fi
 
-    cd "$DEV_BROWSER_DIR" && ./node_modules/.bin/tsx <<CONSOLE_SCRIPT
+    cd "$DEV_BROWSER_DIR" && run_ts <<CONSOLE_SCRIPT
 import { connect } from "@/client.js";
 
 const client = await connect("http://localhost:${SERVER_PORT}");
@@ -307,7 +307,7 @@ cmd_styles() {
     local escaped_selector="${selector//\\/\\\\}"  # escape backslashes first
     escaped_selector="${escaped_selector//\"/\\\"}"  # escape double quotes
 
-    cd "$DEV_BROWSER_DIR" && ./node_modules/.bin/tsx <<STYLES_SCRIPT
+    cd "$DEV_BROWSER_DIR" && run_ts <<STYLES_SCRIPT
 import { connect } from "@/client.js";
 
 const client = await connect("http://localhost:${SERVER_PORT}");
@@ -515,7 +515,7 @@ cmd_element() {
     local escaped_selector="${selector//\\/\\\\}"
     escaped_selector="${escaped_selector//\"/\\\"}"
 
-    cd "$DEV_BROWSER_DIR" && ./node_modules/.bin/tsx <<ELEMENT_SCRIPT
+    cd "$DEV_BROWSER_DIR" && run_ts <<ELEMENT_SCRIPT
 import { connect } from "@/client.js";
 
 const client = await connect("http://localhost:${SERVER_PORT}");
@@ -1008,7 +1008,7 @@ cmd_annotate() {
     fi
     local screenshot_path="$PROJECT_SCREENSHOTS_DIR/$output_file"
 
-    cd "$DEV_BROWSER_DIR" && ./node_modules/.bin/tsx <<ANNOTATE_SCRIPT
+    cd "$DEV_BROWSER_DIR" && run_ts <<ANNOTATE_SCRIPT
 import { connect } from "@/client.js";
 import * as fs from "fs";
 import * as path from "path";
@@ -1247,7 +1247,7 @@ cmd_watch_design() {
 
     # Run a SINGLE persistent tsx script that maintains ONE browser connection
     # and outputs screenshot paths to stdout for the shell loop to process
-    cd "$DEV_BROWSER_DIR" && ./node_modules/.bin/tsx <<WATCH_SCRIPT &
+    cd "$DEV_BROWSER_DIR" && run_ts <<WATCH_SCRIPT &
 import { connect } from "@/client.js";
 import { execFileSync } from "child_process";
 import * as fs from "fs";

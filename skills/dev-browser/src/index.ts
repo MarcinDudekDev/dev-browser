@@ -197,7 +197,7 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     }
   }
 
-  // Check if context is alive; if dead, relaunch (dev/stealth only)
+  // Check if context is alive; if dead, kill stale Chrome and relaunch (dev/stealth only)
   async function ensureContext(): Promise<void> {
     if (browserMode === "user") return;
     try {
@@ -206,6 +206,13 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     } catch {
       console.log("Browser context is dead — relaunching...");
       registry.clear();
+      // Kill stale Chrome processes holding CDP port before relaunch
+      try {
+        const { execSync } = await import("child_process");
+        // Use fuser instead of lsof (lsof hangs on macOS)
+        execSync(`kill -9 $(fuser ${cdpPort}/tcp 2>/dev/null) 2>/dev/null`, { stdio: "ignore", timeout: 5000 });
+        await new Promise(r => setTimeout(r, 1000));
+      } catch { /* no stale processes */ }
       await launchBrowserContext();
       console.log("Browser relaunched successfully");
     }
@@ -245,6 +252,18 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
   } else {
     console.log(`Using persistent browser profile: ${userDataDir}`);
     await launchBrowserContext();
+
+    // Close all pre-existing pages from session restore — registry is empty,
+    // so these are orphans from previous server runs. Sessions will create fresh pages.
+    try {
+      const restoredPages = context.pages();
+      if (restoredPages.length > 0) {
+        console.log(`Closing ${restoredPages.length} restored tab(s) from previous session...`);
+        for (const p of restoredPages) {
+          try { await p.close(); } catch { /* already closed */ }
+        }
+      }
+    } catch { /* context may not support pages() yet */ }
   }
 
   console.log(`CDP WebSocket endpoint: ${wsEndpoint}`);
@@ -275,15 +294,17 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
   // Registry: name -> PageEntry
   const registry = new Map<string, PageEntry>();
 
-  // Helper to get CDP targetId for a page
+  // Helper to get CDP targetId for a page (with timeout to prevent hangs)
   async function getTargetId(page: Page): Promise<string> {
-    const cdpSession = await context.newCDPSession(page);
-    try {
-      const { targetInfo } = await cdpSession.send("Target.getTargetInfo");
-      return targetInfo.targetId;
-    } finally {
-      await cdpSession.detach();
-    }
+    return withTimeout((async () => {
+      const cdpSession = await context.newCDPSession(page);
+      try {
+        const { targetInfo } = await cdpSession.send("Target.getTargetInfo");
+        return targetInfo.targetId;
+      } finally {
+        await cdpSession.detach();
+      }
+    })(), 10000, "getTargetId timed out after 10s");
   }
 
   // Express server for page management
@@ -403,7 +424,9 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     const entry = registry.get(name);
 
     if (entry) {
-      await entry.page.close();
+      try {
+        await withTimeout(entry.page.close(), 10000, "page.close() timed out after 10s");
+      } catch { /* force-remove from registry even if close hangs */ }
       registry.delete(name);
       res.json({ success: true });
       return;
@@ -457,7 +480,7 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
 
     try {
       const { code } = req.body as { code: string };
-      const result = await entry.page.evaluate((js: string) => {
+      const result = await withTimeout(entry.page.evaluate((js: string) => {
         try {
           const fn = new Function(`return (${js})`);
           const res = fn();
@@ -469,7 +492,7 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
           try { const fn = new Function(js); fn(); return { success: true, result: undefined }; }
           catch (e: unknown) { return { success: false, error: e instanceof Error ? e.message : String(e) }; }
         }
-      }, code);
+      }, code), 30000, "page.evaluate() timed out after 30s");
       res.json(result);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -513,7 +536,12 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
       return;
     }
 
-    res.json({ url: entry.page.url(), name });
+    try {
+      res.json({ url: entry.page.url(), name });
+    } catch {
+      registry.delete(name);
+      res.status(410).json({ error: `Page "${name}" was closed` });
+    }
   });
 
   // ── Fast-path endpoints (skip tsx) ──────────────────────────────
@@ -941,21 +969,15 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     }
   };
 
-  // Register handlers
-  signals.forEach((sig) => process.on(sig, signalHandler));
-  process.on("uncaughtException", (err) => errorHandler(err, "uncaughtException"));
-  process.on("unhandledRejection", (err) => errorHandler(err, "unhandledRejection"));
-  process.on("exit", syncCleanup);
-
   // Wrapped error handlers for removal
   const uncaughtHandler = (err: unknown) => errorHandler(err, "uncaughtException");
   const rejectionHandler = (err: unknown) => errorHandler(err, "unhandledRejection");
 
-  // Re-register with the wrappers for proper removal
-  process.off("uncaughtException", uncaughtHandler);
-  process.off("unhandledRejection", rejectionHandler);
+  // Register handlers (once each)
+  signals.forEach((sig) => process.on(sig, signalHandler));
   process.on("uncaughtException", uncaughtHandler);
   process.on("unhandledRejection", rejectionHandler);
+  process.on("exit", syncCleanup);
 
   // Helper to remove all handlers
   const removeHandlers = () => {

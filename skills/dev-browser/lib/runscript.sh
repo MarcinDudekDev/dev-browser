@@ -3,7 +3,8 @@
 
 # Check for crash info and notify agent
 check_crash_recovery() {
-    local sessions_file="$SKILL_TMP_DIR/sessions.json"
+    local mode="${BROWSER_MODE:-dev}"
+    local sessions_file="$SKILL_TMP_DIR/sessions-${mode}.json"
     if [[ -f "$sessions_file" ]] && grep -q '"crashedAt"' "$sessions_file" 2>/dev/null; then
         local crashed_at
         crashed_at=$(grep -o '"crashedAt"[[:space:]]*:[[:space:]]*"[^"]*"' "$sessions_file" | head -1 | sed 's/.*: *"//;s/"//')
@@ -36,7 +37,7 @@ check_crash_recovery() {
 run_script_fast() {
     local shell_script="$1"
     # PROJECT_PREFIX is already exported by dev-browser.sh — use it as-is
-    export SERVER_PORT PAGE_NAME
+    export SERVER_PORT PAGE_NAME DEV_BROWSER_DIR
     bash "$shell_script"
 }
 
@@ -73,6 +74,11 @@ run_script() {
             -e '/^[[:space:]]*(const|let|var)[[:space:]]+page[[:space:]]*=[[:space:]]*await[[:space:]]+client\.page\(/d' \
             -e '/^[[:space:]]*await[[:space:]]+client\.disconnect\(\)/d')
     fi
+
+    # Strip imports that the wrapper auto-provides (applies to ALL scripts including builtins)
+    SCRIPT=$(echo "$SCRIPT" | sed -E \
+        -e '/^[[:space:]]*(import|const|let|var).*\{[^}]*(resolveField|smartFill)[^}]*\}.*from/d' \
+        -e '/^[[:space:]]*(import|const|let|var).*\{[^}]*(waitForPageLoad|waitForElement|waitForElementGone|waitForCondition|waitForURL|waitForNetworkIdle)[^}]*\}.*from/d')
 
     # Create temp script file with .mts extension for ESM support
     get_project_paths  # sets PROJECT_TMP_DIR
@@ -130,6 +136,7 @@ const connect = async (url?: string) => {
     return client;
 };
 const { waitForPageLoad, waitForElement, waitForElementGone, waitForCondition, waitForURL, waitForNetworkIdle } = await import("@/client.js");
+const { resolveField, smartFill } = await import("@/resolve-field.js");
 
 // Auto-injected: client and page (from -p flag, default "main")
 const client = await connect();
@@ -162,7 +169,7 @@ ENDOFSCRIPT
         cd "$DEV_BROWSER_DIR"
         local output
         local exit_code
-        output=$(./node_modules/.bin/tsx "$TEMP_SCRIPT" 2>&1)
+        output=$(run_ts "$TEMP_SCRIPT" 2>&1)
         exit_code=$?
 
         # Success - print output and exit

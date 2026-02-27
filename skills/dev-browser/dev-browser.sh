@@ -240,7 +240,7 @@ case "$1" in
                 [[ -n "$_scroll_to" ]] && export SCROLL_TO="$_scroll_to"
                 [[ -n "$_selector" ]] && export SELECTOR_TARGET="$_selector"
                 export SERVER_PORT
-                cd "$DEV_BROWSER_DIR" && ./node_modules/.bin/tsx "$BUILTIN_SCRIPTS_DIR/screenshot.ts"
+                cd "$DEV_BROWSER_DIR" && run_ts "$BUILTIN_SCRIPTS_DIR/screenshot.ts"
                 _exit=$?
                 _latest_shot="$PROJECT_SCREENSHOTS_DIR/$(ls -t "$PROJECT_SCREENSHOTS_DIR" 2>/dev/null | head -1)"
                 [[ -f "$_latest_shot" ]] && resize_screenshot "$_latest_shot" 2>/dev/null

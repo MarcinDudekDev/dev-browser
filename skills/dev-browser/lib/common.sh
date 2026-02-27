@@ -2,7 +2,9 @@
 # Common variables and functions for dev-browser
 
 # Directories
-SKILL_TMP_DIR="$DEV_BROWSER_DIR/tmp"
+# DEV_BROWSER_HOME: root directory for user data (screenshots, scripts, tmp)
+DEV_BROWSER_HOME="${DEV_BROWSER_HOME:-$HOME/.dev-browser}"
+SKILL_TMP_DIR="$DEV_BROWSER_HOME/tmp"
 mkdir -p "$SKILL_TMP_DIR"
 
 # Config
@@ -46,15 +48,28 @@ set_mode_vars() {
     export SERVER_PORT CDP_PORT SERVER_PID_FILE SERVER_LOG
 }
 
-# Initialize with default mode (will be overridden when mode is known)
-set_mode_vars "dev"
-# DEV_BROWSER_HOME: root directory for user data (screenshots, scripts, tools)
-# Override via env var or set in ~/.dev-browser/config
-DEV_BROWSER_HOME="${DEV_BROWSER_HOME:-$HOME/.dev-browser}"
+# Initialize mode vars only if not already set (dev-browser.sh handles this)
+if [[ -z "$SERVER_PORT" ]]; then
+    set_mode_vars "dev"
+fi
 SCREENSHOTS_DIR="${SCREENSHOTS_DIR:-$DEV_BROWSER_HOME/screenshots}"
 BUILTIN_SCRIPTS_DIR="$DEV_BROWSER_DIR/scripts"
 USER_SCRIPTS_DIR="${USER_SCRIPTS_DIR:-$DEV_BROWSER_HOME/scripts}"
 VISUAL_DIFF="${VISUAL_DIFF:-$DEV_BROWSER_HOME/visual-diff}"
+
+# Fast TypeScript runner: bun for file scripts, tsx for heredocs (CDP compat)
+# bun: 140ms startup but CDP WebSocket issues with Playwright connectOverCDP
+# tsx: 660ms startup but full Playwright compatibility
+run_ts() {
+    if [[ $# -eq 0 ]] || [[ "$1" == "-" ]]; then
+        # Stdin/heredoc mode: always use tsx (bun has CDP WebSocket issues)
+        ./node_modules/.bin/tsx "$@"
+    elif command -v bun &>/dev/null; then
+        bun run "$@"
+    else
+        ./node_modules/.bin/tsx "$@"
+    fi
+}
 
 # Debug logging (keeps last 500 lines)
 log_debug() {
@@ -68,8 +83,30 @@ log_debug() {
 # Check if server is truly healthy (uses /health endpoint)
 check_server_health() {
     local response
-    response=$(curl -s --connect-timeout 2 "http://localhost:$SERVER_PORT/health" 2>/dev/null)
+    response=$(curl -s --connect-timeout 1 -m 2 "http://localhost:$SERVER_PORT/health" 2>/dev/null)
     [[ "$response" == "ok" ]]
+}
+
+# Ensure server is healthy, auto-restart once if dead. Exit 1 on failure.
+# Requires server.sh to be sourced (start_server/stop_server available).
+ensure_server() {
+    if check_server_health; then
+        return 0
+    fi
+    # If start_server isn't loaded yet, source it
+    if ! type start_server &>/dev/null; then
+        source "$DEV_BROWSER_DIR/lib/server.sh"
+    fi
+    echo "Server not responding, attempting auto-restart..." >&2
+    log_debug "ensure_server: health check failed, auto-restarting"
+    stop_server
+    sleep 1
+    if start_server; then
+        echo "Server restarted successfully" >&2
+        return 0
+    fi
+    print_server_error "Auto-restart failed"
+    exit 1
 }
 
 # Print friendly error with recovery instructions
@@ -92,21 +129,28 @@ print_server_error() {
 # Get project prefix — uses tmux session name (constant per window),
 # falls back to projects.json lookup, then directory basename
 get_project_prefix() {
+    # Return cached result if available
+    if [[ -n "$_cached_project_prefix" ]]; then
+        printf '%s' "$_cached_project_prefix"
+        return
+    fi
+
+    local result=""
+
     # Priority 1: tmux session name (most reliable — constant per window)
     if [[ -n "$TMUX" ]]; then
         local tmux_session
         tmux_session=$(tmux display-message -p '#S' 2>/dev/null)
         if [[ -n "$tmux_session" ]]; then
-            printf '%s' "$tmux_session"
-            return
+            result="$tmux_session"
         fi
     fi
 
     # Priority 2: projects.json lookup by cwd
-    local cwd="$PWD"
-    local prefix=""
-    if [[ -f "$HOME/.claude/projects.json" ]]; then
-        prefix=$(python3 -c "
+    if [[ -z "$result" ]]; then
+        local cwd="$PWD"
+        if [[ -f "$HOME/.claude/projects.json" ]]; then
+            result=$(python3 -c "
 import json, os
 cwd = '$cwd'
 found = None
@@ -122,14 +166,16 @@ except:
 if found:
     print(found, end='')
 " 2>/dev/null)
+        fi
     fi
 
     # Priority 3: directory basename
-    if [[ -z "$prefix" ]]; then
-        prefix=$(basename "$cwd" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | cut -c1-20 | tr -d '\n')
+    if [[ -z "$result" ]]; then
+        result=$(basename "$PWD" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | cut -c1-20 | tr -d '\n')
     fi
 
-    printf '%s' "$prefix"
+    _cached_project_prefix="$result"
+    printf '%s' "$result"
 }
 
 # Get per-project paths for screenshots and temp scripts

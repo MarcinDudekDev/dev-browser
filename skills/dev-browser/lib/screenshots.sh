@@ -9,7 +9,7 @@ cmd_screenshot() {
     start_server || return 1
     local PREFIX=$(get_project_prefix)
     mkdir -p "$PROJECT_SCREENSHOTS_DIR"
-    cd "$DEV_BROWSER_DIR" && ./node_modules/.bin/tsx <<SCREENSHOT_SCRIPT
+    cd "$DEV_BROWSER_DIR" && run_ts <<SCREENSHOT_SCRIPT
 import { connect } from "@/client.js";
 const client = await connect("http://localhost:${SERVER_PORT}");
 const pages = await client.list();
@@ -43,7 +43,7 @@ cmd_responsive() {
     mkdir -p "$output_dir"
     local timestamp=$(date +%Y%m%d-%H%M%S)
 
-    cd "$DEV_BROWSER_DIR" && ./node_modules/.bin/tsx <<RESPONSIVE_SCRIPT
+    cd "$DEV_BROWSER_DIR" && run_ts <<RESPONSIVE_SCRIPT
 import { connect } from "@/client.js";
 
 const breakpoints = [
@@ -121,7 +121,7 @@ cmd_resize() {
 
     # Check which page name exists
     local pages_json
-    pages_json=$(curl -s "http://localhost:${SERVER_PORT}/pages")
+    pages_json=$(curl -s -m 10 "http://localhost:${SERVER_PORT}/pages")
     if ! echo "$pages_json" | python3 -c "import sys,json; pages=json.load(sys.stdin)['pages']; sys.exit(0 if '${full_name}' in pages else 1)" 2>/dev/null; then
         if echo "$pages_json" | python3 -c "import sys,json; pages=json.load(sys.stdin)['pages']; sys.exit(0 if '${page_name}' in pages else 1)" 2>/dev/null; then
             target_name="$page_name"
@@ -134,7 +134,7 @@ cmd_resize() {
     fi
 
     local result
-    result=$(curl -s -X POST "http://localhost:${SERVER_PORT}/pages/$(python3 -c "import urllib.parse; print(urllib.parse.quote('${target_name}'))")/resize" \
+    result=$(curl -s -m 10 -X POST "http://localhost:${SERVER_PORT}/pages/$(python3 -c "import urllib.parse; print(urllib.parse.quote('${target_name}'))")/resize" \
         -H "Content-Type: application/json" \
         -d "{\"width\":${width},\"height\":${height}}")
 

@@ -64,15 +64,6 @@ start_server() {
 
     if check_server_health; then
         log_debug "Server already healthy for mode $mode"
-        # Fix stale PID file: find actual process listening on our port
-        local actual_pid=$(lsof -ti:$SERVER_PORT -sTCP:LISTEN 2>/dev/null | head -1)
-        if [[ -n "$actual_pid" ]]; then
-            local file_pid=$(cat "$SERVER_PID_FILE" 2>/dev/null)
-            if [[ "$actual_pid" != "$file_pid" ]]; then
-                log_debug "Fixing stale PID file: $file_pid -> $actual_pid"
-                printf '%s' "$actual_pid" > "$SERVER_PID_FILE"
-            fi
-        fi
         # NOTE: Do NOT run cleanup_orphaned_tabs here. It was spawning a background
         # process on EVERY command invocation, causing races that closed active pages.
         # Cleanup only runs on new server start (below) or explicit --cleanup.
@@ -84,9 +75,6 @@ start_server() {
         log_debug "Port responds but health check failed - zombie state, restarting"
         echo "Server in bad state (browser likely crashed), restarting..." >&2
         stop_server
-        sleep 1
-        # Also kill any orphaned CDP processes on the port
-        lsof -ti:$CDP_PORT 2>/dev/null | xargs kill -9 2>/dev/null
         sleep 1
     fi
 
@@ -182,9 +170,8 @@ server_status() {
         local pages=""
 
         if check_server_health; then
-            local pid=$(lsof -ti:$SERVER_PORT -sTCP:LISTEN 2>/dev/null | head -1)
-            pid="${pid:-$(cat "$SERVER_PID_FILE" 2>/dev/null)}"
-            status="RUNNING (PID $pid, port $SERVER_PORT)"
+            local pid=$(cat "$SERVER_PID_FILE" 2>/dev/null)
+            status="RUNNING (PID ${pid:-?}, port $SERVER_PORT)"
             pages=$(curl -s -m 2 "http://localhost:$SERVER_PORT/pages" 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); pages=d.get('pages',[]); print(f'{len(pages)} pages')" 2>/dev/null)
         elif [[ -f "$SERVER_PID_FILE" ]]; then
             local pid=$(cat "$SERVER_PID_FILE")

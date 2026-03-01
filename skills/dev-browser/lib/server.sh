@@ -133,6 +133,10 @@ stop_server() {
                 fi
                 rm -f "$SERVER_PID_FILE"
             fi
+            # Kill orphaned Chromium on this mode's CDP port (not for user mode)
+            if [[ "$m" != "user" ]]; then
+                _kill_cdp_browser "$CDP_PORT"
+            fi
         done
         pkill -f "start-server.ts" 2>/dev/null
         log_debug "All servers stopped"
@@ -154,8 +158,28 @@ stop_server() {
         fi
         # Also kill any orphaned server processes for this mode
         pkill -f "BROWSER_MODE=$mode.*start-server" 2>/dev/null
+        # Kill orphaned Chromium on this mode's CDP port (not for user mode)
+        if [[ "$mode" != "user" ]]; then
+            _kill_cdp_browser "$CDP_PORT"
+        fi
         log_debug "Server stopped"
         echo "Server stopped" >&2
+    fi
+}
+
+# Kill Chromium process listening on a CDP port (cleanup orphans after server stop)
+_kill_cdp_browser() {
+    local port="$1"
+    [[ -z "$port" ]] && return
+    # Find PID listening on the CDP port via lsof (most reliable on macOS)
+    local browser_pid
+    browser_pid=$(lsof -ti :"$port" -sTCP:LISTEN 2>/dev/null | head -1)
+    if [[ -n "$browser_pid" ]]; then
+        log_debug "Killing orphaned browser on CDP port $port (PID $browser_pid)"
+        echo "  Killing orphaned browser (PID $browser_pid on port $port)..." >&2
+        kill "$browser_pid" 2>/dev/null
+        sleep 0.5
+        kill -0 "$browser_pid" 2>/dev/null && kill -9 "$browser_pid" 2>/dev/null
     fi
 }
 

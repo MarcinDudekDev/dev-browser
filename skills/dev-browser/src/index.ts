@@ -12,6 +12,7 @@ import type {
 } from "./types";
 import { humanMouseMove, getElementCenter, startIdleMovement, stopIdleMovement } from "./mouse-human";
 import { resolveField, smartFill } from "./resolve-field.js";
+import { getSnapshotScript } from "./snapshot/browser-script";
 
 export type { ServeOptions, GetPageResponse, ListPagesResponse, ServerInfoResponse };
 
@@ -468,6 +469,35 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     }
   });
 
+  // POST /pages/:name/aria - get ARIA accessibility snapshot using server's Page object
+  // This avoids client-side connectOverCDP which can timeout on heavy pages
+  app.post("/pages/:name/aria", async (req: Request<{ name: string }>, res: Response) => {
+    const name = decodeURIComponent(req.params.name);
+    const entry = registry.get(name);
+
+    if (!entry) {
+      res.status(404).json({ error: `Page "${name}" not found` });
+      return;
+    }
+
+    try {
+      const snapshotScript = getSnapshotScript();
+      const snapshot = await withTimeout(entry.page.evaluate((script: string) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const w = globalThis as any;
+        if (!w.__devBrowser_getAISnapshot) {
+          // eslint-disable-next-line no-eval
+          eval(script);
+        }
+        return w.__devBrowser_getAISnapshot();
+      }, snapshotScript), 30000, "ARIA snapshot timed out after 30s");
+      res.json({ success: true, snapshot });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ error: msg });
+    }
+  });
+
   // POST /pages/:name/evaluate - evaluate JS using server's Page object
   app.post("/pages/:name/evaluate", async (req: Request<{ name: string }>, res: Response) => {
     const name = decodeURIComponent(req.params.name);
@@ -520,6 +550,48 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
       const vp = entry.page.viewportSize();
       console.log(`Resize "${name}" → ${vp?.width}x${vp?.height}`);
       res.json({ success: true, width: vp?.width, height: vp?.height });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // POST /cookies - inject cookies into browser context via Playwright addCookies()
+  // Uses context-level API which properly handles domain matching, secure flags, httpOnly
+  app.post("/cookies", async (req: Request, res: Response) => {
+    try {
+      const { cookies } = req.body as { cookies: Array<Record<string, unknown>> };
+      if (!cookies || !Array.isArray(cookies) || cookies.length === 0) {
+        res.status(400).json({ error: "cookies array is required and must not be empty" });
+        return;
+      }
+
+      // Convert Chrome extension cookie format to Playwright format
+      const playwrightCookies = cookies.map(c => {
+        const cookie: Record<string, unknown> = {
+          name: String(c.name || ""),
+          value: String(c.value || ""),
+          domain: String(c.domain || ""),
+          path: String(c.path || "/"),
+        };
+        if (c.expirationDate && Number(c.expirationDate) > 0) {
+          cookie.expires = Number(c.expirationDate);
+        }
+        if (c.httpOnly !== undefined) cookie.httpOnly = Boolean(c.httpOnly);
+        if (c.secure !== undefined) cookie.secure = Boolean(c.secure);
+        if (c.sameSite) {
+          // Chrome uses lowercase, Playwright uses capitalized
+          const ss = String(c.sameSite).toLowerCase();
+          if (ss === "strict") cookie.sameSite = "Strict";
+          else if (ss === "lax") cookie.sameSite = "Lax";
+          else if (ss === "none") cookie.sameSite = "None";
+        }
+        return cookie;
+      });
+
+      await context.addCookies(playwrightCookies as Parameters<typeof context.addCookies>[0]);
+      console.log(`Injected ${playwrightCookies.length} cookies (domains: ${[...new Set(playwrightCookies.map(c => c.domain))].join(", ")})`);
+      res.json({ success: true, count: playwrightCookies.length });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       res.status(500).json({ error: msg });

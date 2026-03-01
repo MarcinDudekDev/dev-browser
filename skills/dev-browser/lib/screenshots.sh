@@ -9,28 +9,45 @@ cmd_screenshot() {
     start_server || return 1
     local PREFIX=$(get_project_prefix)
     mkdir -p "$PROJECT_SCREENSHOTS_DIR"
-    cd "$DEV_BROWSER_DIR" && run_ts <<SCREENSHOT_SCRIPT
-import { connect } from "@/client.js";
-const client = await connect("http://localhost:${SERVER_PORT}");
-const pages = await client.list();
-// Try prefixed name first, then raw name for cross-project access
-let pageName = "${PREFIX}-${page_name}";
-if (!pages.includes(pageName) && pages.includes("${page_name}")) {
-    pageName = "${page_name}";
-}
-if (!pages.includes(pageName)) {
-    console.error("Page '${page_name}' not found (full name: " + pageName + ")");
-    console.error("Available pages:");
-    pages.forEach(p => console.error("  - " + p));
-    await client.disconnect();
-    process.exit(1);
-}
-const page = await client.page(pageName);
-console.log("Page URL:", page.url(), "| Target:", pageName);
-await page.screenshot({ path: "${screenshot_path}", fullPage: true });
-console.log("Screenshot saved:", "${screenshot_path}");
-await client.disconnect();
-SCREENSHOT_SCRIPT
+
+    # Use server-side screenshot endpoint (avoids client-side CDP reconnection issues)
+    local full_name="${PREFIX}-${page_name}"
+    local target_name="$full_name"
+
+    # Check which page name exists
+    local pages_json
+    pages_json=$(curl -s -m 10 "http://localhost:${SERVER_PORT}/pages")
+    if ! echo "$pages_json" | python3 -c "import sys,json; pages=json.load(sys.stdin)['pages']; sys.exit(0 if '${full_name}' in pages else 1)" 2>/dev/null; then
+        if echo "$pages_json" | python3 -c "import sys,json; pages=json.load(sys.stdin)['pages']; sys.exit(0 if '${page_name}' in pages else 1)" 2>/dev/null; then
+            target_name="$page_name"
+        else
+            echo "Page '${page_name}' not found (full name: ${full_name})" >&2
+            echo "Available pages:" >&2
+            echo "$pages_json" | python3 -c "import sys,json; [print('  -',p) for p in json.load(sys.stdin)['pages']]" 2>/dev/null
+            return 1
+        fi
+    fi
+
+    local encoded_name
+    encoded_name=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${target_name}'))")
+    local body
+    body=$(python3 -c "import json; print(json.dumps({'path': '${screenshot_path}', 'fullPage': True}))")
+    local result
+    result=$(curl -s -m 35 -X POST "http://localhost:${SERVER_PORT}/pages/${encoded_name}/screenshot" -H "Content-Type: application/json" -d "$body")
+
+    local error
+    error=$(echo "$result" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('error',''))" 2>/dev/null)
+    if [[ -n "$error" ]]; then
+        echo "Screenshot failed: $error" >&2
+        return 1
+    fi
+
+    local url
+    url=$(echo "$result" | python3 -c "import sys,json; print(json.load(sys.stdin).get('url',''))" 2>/dev/null)
+    local viewport
+    viewport=$(echo "$result" | python3 -c "import sys,json; print(json.load(sys.stdin).get('viewport',''))" 2>/dev/null)
+    echo "Page URL: ${url} | Viewport: ${viewport}"
+    echo "Screenshot saved: ${screenshot_path}"
     resize_screenshot "$screenshot_path"
 }
 

@@ -319,7 +319,7 @@ case "$1" in
         ;;
 
     # Quick browsing commands (no --run prefix, agent-browser style)
-    goto|click|jsclick|text|fill|select|select-react|aria|eval|upload|dismiss-consent|scroll-to|dismiss-overlays|drag|extract|slide)
+    goto|click|jsclick|text|fill|select|select-react|aria|eval|upload|dismiss-consent|scroll-to|dismiss-overlays|drag|extract|slide|inject-cookies)
         source "$LIB_DIR/server.sh"
         source "$LIB_DIR/runscript.sh"
         start_server || exit 1
@@ -344,6 +344,10 @@ case "$1" in
             esac
         done
         export SCRIPT_ARGS="${_clean_args[*]}"
+        # Export individual args for commands that need compound selectors (spaces in args)
+        export SCRIPT_ARGC="${#_clean_args[@]}"
+        [[ ${#_clean_args[@]} -ge 1 ]] && export SCRIPT_ARG0="${_clean_args[0]}"
+        [[ ${#_clean_args[@]} -ge 2 ]] && export SCRIPT_ARG1="${_clean_args[1]}"
         export PROJECT_PREFIX=$(get_project_prefix)
         [[ $_force_click -eq 1 ]] && export FORCE_CLICK=1
         run_script "$BUILTIN_SCRIPTS_DIR/$_cmd.ts"

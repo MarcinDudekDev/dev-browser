@@ -10,6 +10,16 @@ mkdir -p "$SKILL_TMP_DIR"
 # Config
 MAX_SCREENSHOT_DIM=7500
 DEBUG_LOG="$SKILL_TMP_DIR/debug.log"
+# Audit log always in canonical home dir (not symlink source dir)
+AUDIT_LOG="${HOME}/.dev-browser/audit.log"
+
+# Audit logging — permanent record of every command with input/output
+# Rotate at 10K lines (keep 5K)
+audit_rotate() {
+    if [[ $(wc -l < "$AUDIT_LOG" 2>/dev/null || echo 0) -gt 10000 ]]; then
+        tail -5000 "$AUDIT_LOG" > "$AUDIT_LOG.tmp" && mv "$AUDIT_LOG.tmp" "$AUDIT_LOG"
+    fi
+}
 
 # Multi-server port configuration (each mode gets its own server)
 # Format: HTTP_PORT / CDP_PORT
@@ -57,18 +67,14 @@ BUILTIN_SCRIPTS_DIR="$DEV_BROWSER_DIR/scripts"
 USER_SCRIPTS_DIR="${USER_SCRIPTS_DIR:-$DEV_BROWSER_HOME/scripts}"
 VISUAL_DIFF="${VISUAL_DIFF:-$DEV_BROWSER_HOME/visual-diff}"
 
-# Fast TypeScript runner: bun for file scripts, tsx for heredocs (CDP compat)
-# bun: 140ms startup but CDP WebSocket issues with Playwright connectOverCDP
-# tsx: 660ms startup but full Playwright compatibility
+# TypeScript runner: bun for file scripts (140ms), tsx for heredocs (660ms).
+# Playwright's bundled ws doesn't work in Bun (no HTTP upgrade support).
+# Fix: patched utilsBundle.js to use native ws in Bun — see postinstall.sh.
 run_ts() {
-    if [[ $# -eq 0 ]] || [[ "$1" == "-" ]]; then
-        # Stdin/heredoc mode: always use tsx (bun has CDP WebSocket issues)
-        ./node_modules/.bin/tsx "$@"
-    elif command -v bun &>/dev/null; then
-        bun run "$@"
-    else
-        ./node_modules/.bin/tsx "$@"
-    fi
+    # TODO: switch back to bun once oven-sh/bun#9911 merges (PR #27859)
+    # Bun is ~2x faster but lacks ws 'upgrade' event, breaking Playwright CDP.
+    # All scripts that go through run_script() use Playwright, so tsx is required.
+    ./node_modules/.bin/tsx "$@"
 }
 
 # Debug logging (keeps last 500 lines)
@@ -97,12 +103,10 @@ ensure_server() {
     if ! type start_server &>/dev/null; then
         source "$DEV_BROWSER_DIR/lib/server.sh"
     fi
-    echo "Server not responding, attempting auto-restart..." >&2
-    log_debug "ensure_server: health check failed, auto-restarting"
-    stop_server
-    sleep 1
+    echo "Server not responding, attempting restart..." >&2
+    log_debug "ensure_server: health check failed, calling start_server (handles lock+cooldown)"
+    # start_server handles zombie detection, stop, lock, and cooldown internally
     if start_server; then
-        echo "Server restarted successfully" >&2
         return 0
     fi
     print_server_error "Auto-restart failed"

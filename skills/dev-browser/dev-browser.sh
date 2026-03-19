@@ -85,6 +85,7 @@ DIAGNOSTICS
     --cleanup --project <n>   Close specific project page
     --debug                   Show debug log
     --crashes                 Show crash logs
+    --audit [N|errors]        Show last N audit entries (default 20) or errors only
     --wplogin <url>           WordPress auto-login (admin/admin123)
     --setup-brave             Show user-mode setup instructions
 
@@ -139,6 +140,43 @@ LIB_DIR="$DEV_BROWSER_DIR/lib"
 
 # Source common functions
 source "$LIB_DIR/common.sh"
+
+# === Audit logging: re-exec self to capture all output ===
+# On first run, re-invoke with _AUDIT_ACTIVE=1, capture stdout+stderr to separate files
+if [[ -z "$_AUDIT_ACTIVE" ]]; then
+    export _AUDIT_ACTIVE=1
+    _audit_tmpdir="${HOME}/.dev-browser/tmp"
+    mkdir -p "$_audit_tmpdir"
+    _audit_stdout=$(mktemp "$_audit_tmpdir/audit-out-XXXXXX")
+    _audit_stderr=$(mktemp "$_audit_tmpdir/audit-err-XXXXXX")
+    # Re-run: tee stdout, tee stderr (preserving fd separation for caller)
+    { "$0" "$@" 2> >(tee "$_audit_stderr" >&2); } | tee "$_audit_stdout"
+    _ec=${PIPESTATUS[0]}
+    # Small delay to let stderr tee flush
+    sleep 0.05
+    # Write audit entry
+    {
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] CMD: dev-browser.sh $*"
+        echo "  EXIT: $_ec"
+        if [[ -s "$_audit_stdout" ]]; then
+            _lines=$(wc -l < "$_audit_stdout")
+            echo "  STDOUT (${_lines} lines):"
+            head -50 "$_audit_stdout" | sed 's/^/  | /'
+            [[ $_lines -gt 50 ]] && echo "  | ... (truncated, $_lines total)"
+        fi
+        if [[ -s "$_audit_stderr" ]]; then
+            _lines=$(wc -l < "$_audit_stderr")
+            echo "  STDERR (${_lines} lines):"
+            head -50 "$_audit_stderr" | sed 's/^/  ! /'
+            [[ $_lines -gt 50 ]] && echo "  ! ... (truncated, $_lines total)"
+        fi
+        echo ""
+    } >> "$AUDIT_LOG"
+    rm -f "$_audit_stdout" "$_audit_stderr"
+    audit_rotate
+    exit "$_ec"
+fi
+unset _AUDIT_ACTIVE
 
 # Handle global flags: --cachebust, -p/--page, --quiet-console, --stealth, --user
 CACHEBUST_FLAG=0
@@ -203,13 +241,28 @@ case "$1" in
         ;;
 
     # Diagnostic commands
-    --debug|--crashes|--tabs|--cleanup)
+    --debug|--crashes|--tabs|--cleanup|--audit)
         source "$LIB_DIR/diagnostics.sh"
         case "$1" in
             --debug) cmd_debug; exit 0 ;;
             --crashes) cmd_crashes; exit 0 ;;
             --tabs) cmd_tabs; exit 0 ;;
             --cleanup) shift; cmd_cleanup "$@"; exit 0 ;;
+            --audit)
+                if [[ ! -f "$AUDIT_LOG" ]]; then
+                    echo "No audit log yet." >&2; exit 1
+                fi
+                # --audit errors: show only non-zero exits
+                # --audit N: show last N entries (default 20)
+                if [[ "$2" == "errors" ]]; then
+                    grep -B1 -A20 'EXIT: [^0]' "$AUDIT_LOG" | tail -100
+                else
+                    n="${2:-20}"
+                    # Each entry ends with blank line; show last N entries
+                    awk -v n="$n" 'BEGIN{RS=""; ORS="\n\n"} {a[NR]=$0} END{for(i=NR-n+1;i<=NR;i++) if(i>0) print a[i]}' "$AUDIT_LOG"
+                fi
+                exit 0
+                ;;
         esac
         ;;
 
@@ -219,32 +272,10 @@ case "$1" in
         source "$LIB_DIR/screenshots.sh"
         case "$1" in
             --screenshot)
-                # Use server-side screenshot (server's Page object, avoids stale CDP)
-                start_server || exit 1
-                get_project_paths
-                export SCREENSHOTS_DIR="$PROJECT_SCREENSHOTS_DIR"
-                export PROJECT_PREFIX=$(get_project_prefix)
+                # Use server-side screenshot via curl (avoids client CDP reconnection)
                 shift # consume --screenshot
-                # Parse remaining args: [page] [filename] [--scroll-to <sel|px>] [--selector <css>]
-                _page="" _fname="" _scroll_to="" _selector=""
-                while [[ $# -gt 0 ]]; do
-                    case "$1" in
-                        --scroll-to) _scroll_to="${2:-}"; shift 2 ;;
-                        --selector) _selector="${2:-}"; shift 2 ;;
-                        --*) echo "WARNING: Unknown flag '$1' ignored" >&2; shift ;;
-                        *) if [[ -z "$_page" ]]; then _page="$1"; elif [[ -z "$_fname" ]]; then _fname="$1"; else echo "WARNING: Unknown argument '$1' ignored" >&2; fi; shift ;;
-                    esac
-                done
-                [[ -n "$_page" ]] && PAGE_NAME="$_page" && export PAGE_NAME
-                export SCRIPT_ARGS="$_fname"
-                [[ -n "$_scroll_to" ]] && export SCROLL_TO="$_scroll_to"
-                [[ -n "$_selector" ]] && export SELECTOR_TARGET="$_selector"
-                export SERVER_PORT
-                cd "$DEV_BROWSER_DIR" && run_ts "$BUILTIN_SCRIPTS_DIR/screenshot.ts"
-                _exit=$?
-                _latest_shot="$PROJECT_SCREENSHOTS_DIR/$(ls -t "$PROJECT_SCREENSHOTS_DIR" 2>/dev/null | head -1)"
-                [[ -f "$_latest_shot" ]] && resize_screenshot "$_latest_shot" 2>/dev/null
-                exit $_exit
+                cmd_screenshot "$@"
+                exit $?
                 ;;
             --snap) "$VISUAL_DIFF" --snap "${2:-main}"; exit $? ;;
             --diff) "$VISUAL_DIFF" --compare "${2:-main}"; exit $? ;;
@@ -319,7 +350,7 @@ case "$1" in
         ;;
 
     # Quick browsing commands (no --run prefix, agent-browser style)
-    goto|click|jsclick|text|fill|select|select-react|aria|eval|upload|dismiss-consent|scroll-to|dismiss-overlays|drag|extract|slide|inject-cookies)
+    goto|click|jsclick|text|fill|select|select-react|aria|eval|upload|dismiss-consent|scroll-to|dismiss-overlays|drag|extract|slide|inject-cookies|inject-session|keys|wait)
         source "$LIB_DIR/server.sh"
         source "$LIB_DIR/runscript.sh"
         start_server || exit 1

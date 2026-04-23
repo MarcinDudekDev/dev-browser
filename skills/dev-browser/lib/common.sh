@@ -182,6 +182,59 @@ if found:
     printf '%s' "$result"
 }
 
+# Resolve page name: accepts a page name, prefixed name, or URL.
+# Echoes the resolved target_name on success. Prints error and returns 1 on failure.
+# Usage: target_name=$(resolve_page_name "$arg" "$pages_json" "$PREFIX") || return 1
+resolve_page_name() {
+    local arg="$1"
+    local pages_json="$2"
+    local prefix="${3:-}"
+
+    # Try prefixed name first
+    if [[ -n "$prefix" ]]; then
+        local full_name="${prefix}-${arg}"
+        if echo "$pages_json" | jq -e --arg n "$full_name" '.pages | index($n)' >/dev/null 2>&1; then
+            echo "$full_name"
+            return 0
+        fi
+    fi
+
+    # Try raw name
+    if echo "$pages_json" | jq -e --arg n "$arg" '.pages | index($n)' >/dev/null 2>&1; then
+        echo "$arg"
+        return 0
+    fi
+
+    # If arg looks like a URL, find page whose current URL matches
+    if [[ "$arg" == http://* || "$arg" == https://* ]]; then
+        local page found_name=""
+        while IFS= read -r page; do
+            local encoded_page
+            encoded_page=$(printf '%s' "$page" | jq -sRr '@uri')
+            local page_url
+            page_url=$(curl -s -m 3 "http://localhost:${SERVER_PORT}/pages/${encoded_page}/url" | jq -r '.url // empty' 2>/dev/null)
+            local norm_arg="${arg%/}" norm_url="${page_url%/}"
+            if [[ "$norm_url" == "$norm_arg" || "$norm_url" == "$norm_arg"* || "$norm_arg" == "$norm_url"* ]]; then
+                found_name="$page"
+                break
+            fi
+        done < <(echo "$pages_json" | jq -r '.pages[]' 2>/dev/null)
+
+        if [[ -n "$found_name" ]]; then
+            echo "$found_name"
+            return 0
+        fi
+        echo "No open page found matching URL '${arg}'. Available pages:" >&2
+        echo "$pages_json" | jq -r '.pages[]' 2>/dev/null | sed 's/^/  - /' >&2
+        return 1
+    fi
+
+    # Not found
+    echo "Page '${arg}' not found. Available pages:" >&2
+    echo "$pages_json" | jq -r '.pages[]' 2>/dev/null | sed 's/^/  - /' >&2
+    return 1
+}
+
 # Get per-project paths for screenshots and temp scripts
 get_project_paths() {
     local prefix=$(get_project_prefix)

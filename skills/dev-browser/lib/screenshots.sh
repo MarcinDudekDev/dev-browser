@@ -2,51 +2,87 @@
 # Screenshot commands
 
 cmd_screenshot() {
-    local page_name="${1:-main}"
+    # Usage: cmd_screenshot [page] [filename] [--scroll-to <sel|px>] [--selector <css>]
+    local page_name="" filename="" scroll_to="" selector=""
+    local _pos_args=()
+
+    # Parse args passed directly to cmd_screenshot
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --scroll-to) scroll_to="$2"; shift 2 ;;
+            --selector)  selector="$2"; shift 2 ;;
+            --*) shift ;;
+            *) _pos_args+=("$1"); shift ;;
+        esac
+    done
+
+    # Positional: [page] [filename]
+    [[ ${#_pos_args[@]} -ge 1 ]] && page_name="${_pos_args[0]}"
+    [[ ${#_pos_args[@]} -ge 2 ]] && filename="${_pos_args[1]}"
+
+    # Fall back to PAGE_NAME env (from -p flag)
+    page_name="${page_name:-${PAGE_NAME:-main}}"
+
+    # Also read from env (set by dispatch in dev-browser.sh)
+    [[ -z "$scroll_to" && -n "${SCROLL_TO:-}" ]] && scroll_to="$SCROLL_TO"
+    [[ -z "$selector" && -n "${SELECTOR_TARGET:-}" ]] && selector="$SELECTOR_TARGET"
+
     get_project_paths
-    local filename=$(basename "${2:-screenshot-$(date +%s).png}")
+    filename=$(basename "${filename:-screenshot-$(date +%s).png}")
     local screenshot_path="$PROJECT_SCREENSHOTS_DIR/$filename"
     start_server || return 1
     local PREFIX=$(get_project_prefix)
     mkdir -p "$PROJECT_SCREENSHOTS_DIR"
 
-    # Use server-side screenshot endpoint (avoids client-side CDP reconnection issues)
-    local full_name="${PREFIX}-${page_name}"
-    local target_name="$full_name"
-
-    # Check which page name exists
+    # Resolve page name (accepts name, prefixed name, or URL)
     local pages_json
     pages_json=$(curl -s -m 10 "http://localhost:${SERVER_PORT}/pages")
-    if ! echo "$pages_json" | python3 -c "import sys,json; pages=json.load(sys.stdin)['pages']; sys.exit(0 if '${full_name}' in pages else 1)" 2>/dev/null; then
-        if echo "$pages_json" | python3 -c "import sys,json; pages=json.load(sys.stdin)['pages']; sys.exit(0 if '${page_name}' in pages else 1)" 2>/dev/null; then
-            target_name="$page_name"
-        else
-            echo "Page '${page_name}' not found (full name: ${full_name})" >&2
-            echo "Available pages:" >&2
-            echo "$pages_json" | python3 -c "import sys,json; [print('  -',p) for p in json.load(sys.stdin)['pages']]" 2>/dev/null
-            return 1
-        fi
-    fi
+    local target_name
+    target_name=$(resolve_page_name "$page_name" "$pages_json" "$PREFIX") || return 1
 
     local encoded_name
-    encoded_name=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${target_name}'))")
+    encoded_name=$(printf '%s' "$target_name" | jq -sRr '@uri')
+
+    # If --scroll-to specified, scroll first via evaluate endpoint
+    if [[ -n "$scroll_to" ]]; then
+        local scroll_js
+        if [[ "$scroll_to" =~ ^[0-9]+$ ]]; then
+            scroll_js="window.scrollTo(0, ${scroll_to})"
+        else
+            scroll_js="(() => { const el = document.querySelector($(printf '%s' "$scroll_to" | jq -Rs '.')); if (el) el.scrollIntoView({behavior:'instant',block:'start'}); })()"
+        fi
+        local scroll_body
+        scroll_body=$(jq -nc --arg code "$scroll_js" '{code: $code}')
+        curl -s -m 10 -X POST "http://localhost:${SERVER_PORT}/pages/${encoded_name}/evaluate" \
+            -H "Content-Type: application/json" -d "$scroll_body" >/dev/null
+    fi
+
+    # Build screenshot request body
     local body
-    body=$(python3 -c "import json; print(json.dumps({'path': '${screenshot_path}', 'fullPage': True}))")
+    if [[ -n "$selector" ]]; then
+        body=$(jq -nc --arg path "$screenshot_path" --arg sel "$selector" '{path: $path, selector: $sel}')
+    elif [[ -n "$scroll_to" ]]; then
+        # After scroll-to, take viewport screenshot (not fullPage)
+        body=$(jq -nc --arg path "$screenshot_path" '{path: $path, fullPage: false}')
+    else
+        body=$(jq -nc --arg path "$screenshot_path" '{path: $path, fullPage: true}')
+    fi
+
     local result
-    result=$(curl -s -m 35 -X POST "http://localhost:${SERVER_PORT}/pages/${encoded_name}/screenshot" -H "Content-Type: application/json" -d "$body")
+    result=$(curl -s -m 35 -X POST "http://localhost:${SERVER_PORT}/pages/${encoded_name}/screenshot" \
+        -H "Content-Type: application/json" -d "$body")
 
     local error
-    error=$(echo "$result" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('error',''))" 2>/dev/null)
+    error=$(echo "$result" | jq -r '.error // empty' 2>/dev/null)
     if [[ -n "$error" ]]; then
-        echo "Screenshot failed: $error" >&2
+        echo "screenshot failed: $error" >&2
         return 1
     fi
 
-    local url
-    url=$(echo "$result" | python3 -c "import sys,json; print(json.load(sys.stdin).get('url',''))" 2>/dev/null)
-    local viewport
-    viewport=$(echo "$result" | python3 -c "import sys,json; print(json.load(sys.stdin).get('viewport',''))" 2>/dev/null)
-    echo "Page URL: ${url} | Viewport: ${viewport}"
+    local url viewport
+    url=$(echo "$result" | jq -r '.url // empty' 2>/dev/null)
+    viewport=$(echo "$result" | jq -r '.viewport // empty' 2>/dev/null)
+    echo "Page URL: ${url} | Alias: ${target_name} | Viewport: ${viewport}"
     echo "Screenshot saved: ${screenshot_path}"
     resize_screenshot "$screenshot_path"
 }
@@ -60,47 +96,56 @@ cmd_responsive() {
     mkdir -p "$output_dir"
     local timestamp=$(date +%Y%m%d-%H%M%S)
 
-    cd "$DEV_BROWSER_DIR" && run_ts <<RESPONSIVE_SCRIPT
-import { connect } from "@/client.js";
+    # Resolve page name (accepts name, prefixed name, or URL)
+    local pages_json
+    pages_json=$(curl -s -m 10 "http://localhost:${SERVER_PORT}/pages")
+    local target_name
+    target_name=$(resolve_page_name "$page_name" "$pages_json" "$PREFIX") || return 1
+    local encoded_name
+    encoded_name=$(printf '%s' "$target_name" | jq -sRr '@uri')
 
-const breakpoints = [
-    { name: 'mobile', width: 375, height: 812 },
-    { name: 'tablet', width: 768, height: 1024 },
-    { name: 'laptop', width: 1024, height: 768 },
-    { name: 'desktop', width: 1280, height: 800 },
-];
+    # Get current URL for display
+    local page_url
+    page_url=$(curl -s -m 5 "http://localhost:${SERVER_PORT}/pages/${encoded_name}/url" | jq -r '.url // empty' 2>/dev/null)
+    echo "Taking responsive screenshots of: ${page_url}"
 
-const client = await connect("http://localhost:${SERVER_PORT}");
-const pages = await client.list();
-let pageName = "${PREFIX}-${page_name}";
-if (!pages.includes(pageName) && pages.includes("${page_name}")) {
-    pageName = "${page_name}";
-}
-if (!pages.includes(pageName)) {
-    console.error("Page '${page_name}' not found");
-    console.error("Available pages:", pages.join(", "));
-    await client.disconnect();
-    process.exit(1);
-}
+    local bp_name bp_w bp_h
+    for bp_spec in "mobile:375:812" "tablet:768:1024" "laptop:1024:768" "desktop:1280:800"; do
+        bp_name="${bp_spec%%:*}"
+        bp_w="${bp_spec#*:}"; bp_w="${bp_w%%:*}"
+        bp_h="${bp_spec##*:}"
 
-const page = await client.page(pageName);
-console.log("Taking responsive screenshots of:", page.url());
+        # Resize viewport
+        curl -s -m 10 -X POST "http://localhost:${SERVER_PORT}/pages/${encoded_name}/resize" \
+            -H "Content-Type: application/json" -d "{\"width\":${bp_w},\"height\":${bp_h}}" >/dev/null
 
-for (const bp of breakpoints) {
-    await page.setViewportSize({ width: bp.width, height: bp.height });
-    await page.waitForTimeout(300);
-    const hasOverflow = await page.evaluate(() =>
-        document.documentElement.scrollWidth > document.documentElement.clientWidth
-    );
-    const status = hasOverflow ? '❌ OVERFLOW' : '✅ OK';
-    const path = "${output_dir}/${timestamp}-${page_name}-" + bp.name + ".png";
-    await page.screenshot({ path, fullPage: true });
-    console.log(\`\${bp.name.padEnd(8)} (\${bp.width}px): \${status} → \${path}\`);
-}
-await page.setViewportSize({ width: 1280, height: 800 });
-console.log("\\nViewport reset to desktop (1280x800)");
-await client.disconnect();
-RESPONSIVE_SCRIPT
+        # Check for horizontal overflow
+        local overflow_body
+        overflow_body=$(jq -nc '{code: "document.documentElement.scrollWidth > document.documentElement.clientWidth"}')
+        local overflow_result
+        overflow_result=$(curl -s -m 10 -X POST "http://localhost:${SERVER_PORT}/pages/${encoded_name}/evaluate" \
+            -H "Content-Type: application/json" -d "$overflow_body")
+        local has_overflow
+        has_overflow=$(echo "$overflow_result" | jq -r '.result' 2>/dev/null)
+        local status_label="OK"
+        [[ "$has_overflow" == "true" ]] && status_label="OVERFLOW"
+
+        # Take screenshot
+        local shot_path="${output_dir}/${timestamp}-${page_name}-${bp_name}.png"
+        local shot_body
+        shot_body=$(jq -nc --arg path "$shot_path" '{path: $path, fullPage: true}')
+        curl -s -m 35 -X POST "http://localhost:${SERVER_PORT}/pages/${encoded_name}/screenshot" \
+            -H "Content-Type: application/json" -d "$shot_body" >/dev/null
+
+        printf "%-8s (%spx): %s -> %s\n" "$bp_name" "$bp_w" "$status_label" "$shot_path"
+        resize_screenshot "$shot_path" 2>/dev/null
+    done
+
+    # Reset to desktop
+    curl -s -m 10 -X POST "http://localhost:${SERVER_PORT}/pages/${encoded_name}/resize" \
+        -H "Content-Type: application/json" -d '{"width":1280,"height":800}' >/dev/null
+    echo ""
+    echo "Viewport reset to desktop (1280x800)"
 }
 
 cmd_resize() {
@@ -136,29 +181,32 @@ cmd_resize() {
     local full_name="${PREFIX}-${page_name}"
     local target_name="$full_name"
 
-    # Check which page name exists
+    # Resolve page name
     local pages_json
     pages_json=$(curl -s -m 10 "http://localhost:${SERVER_PORT}/pages")
-    if ! echo "$pages_json" | python3 -c "import sys,json; pages=json.load(sys.stdin)['pages']; sys.exit(0 if '${full_name}' in pages else 1)" 2>/dev/null; then
-        if echo "$pages_json" | python3 -c "import sys,json; pages=json.load(sys.stdin)['pages']; sys.exit(0 if '${page_name}' in pages else 1)" 2>/dev/null; then
+    if ! echo "$pages_json" | jq -e --arg n "$full_name" '.pages | index($n)' >/dev/null 2>&1; then
+        if echo "$pages_json" | jq -e --arg n "$page_name" '.pages | index($n)' >/dev/null 2>&1; then
             target_name="$page_name"
         else
             echo "Page '${page_name}' not found (full name: ${full_name})" >&2
-            echo "Available pages:" >&2
-            echo "$pages_json" | python3 -c "import sys,json; [print('  -',p) for p in json.load(sys.stdin)['pages']]" 2>/dev/null
+            echo "$pages_json" | jq -r '.pages[]' 2>/dev/null | sed 's/^/  - /' >&2
             return 1
         fi
     fi
 
+    local encoded_name
+    encoded_name=$(printf '%s' "$target_name" | jq -sRr '@uri')
     local result
-    result=$(curl -s -m 10 -X POST "http://localhost:${SERVER_PORT}/pages/$(python3 -c "import urllib.parse; print(urllib.parse.quote('${target_name}'))")/resize" \
+    result=$(curl -s -m 10 -X POST "http://localhost:${SERVER_PORT}/pages/${encoded_name}/resize" \
         -H "Content-Type: application/json" \
         -d "{\"width\":${width},\"height\":${height}}")
 
-    if echo "$result" | python3 -c "import sys,json; d=json.load(sys.stdin); sys.exit(0 if d.get('success') else 1)" 2>/dev/null; then
+    if echo "$result" | jq -e '.success' >/dev/null 2>&1; then
         echo "Viewport resized to ${width}x${height}"
     else
-        echo "Resize failed: $result" >&2
+        local error
+        error=$(echo "$result" | jq -r '.error // "unknown error"' 2>/dev/null)
+        echo "resize failed: $error" >&2
         return 1
     fi
 }

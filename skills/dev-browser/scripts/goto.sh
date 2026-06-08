@@ -16,15 +16,20 @@ cb="false"
 [[ "$CACHEBUST" == "1" ]] && cb="true"
 
 # Ensure page exists (POST /pages creates if missing)
-curl -s -X POST "http://localhost:${PORT}/pages" -H 'Content-Type: application/json' -d "{\"name\":\"${PAGE_ID}\"}" >/dev/null
+curl -s -m 5 -X POST "http://localhost:${PORT}/pages" -H 'Content-Type: application/json' -d "{\"name\":\"${PAGE_ID}\"}" >/dev/null
 
 body=$(jq -nc --arg url "$url" --argjson cachebust "$cb" '{url: $url, cachebust: $cachebust}')
-result=$(curl -s -X POST "http://localhost:${PORT}/pages/${PAGE_ID}/goto" -H 'Content-Type: application/json' -d "$body")
+result=$(curl -s -m 35 -X POST "http://localhost:${PORT}/pages/${PAGE_ID}/goto" -H 'Content-Type: application/json' -d "$body")
 
-status=$(echo "$result" | jq -r '.error // empty' 2>/dev/null)
-if [[ -n "$status" ]]; then
-    echo "$result" | jq . >&2
+error=$(echo "$result" | jq -r '.error // empty' 2>/dev/null)
+if [[ -n "$error" ]]; then
+    echo "goto failed: $error" >&2
     exit 1
 fi
 
-echo "$result" | jq .
+# Compact text output
+echo "URL: $(echo "$result" | jq -r '.url')"
+echo "Title: $(echo "$result" | jq -r '.title')"
+state=$(echo "$result" | jq -r '.state // empty')
+[[ -n "$state" ]] && echo "$state"
+exit 0

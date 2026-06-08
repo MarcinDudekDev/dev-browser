@@ -447,8 +447,8 @@ export async function connect(serverUrl = "http://localhost:9222"): Promise<DevB
         const info = (await res.json()) as ServerInfoResponse;
         wsEndpoint = info.wsEndpoint;
 
-        // Connect to the browser via CDP
-        browser = await chromium.connectOverCDP(wsEndpoint);
+        // Connect to the browser via CDP (10s timeout, fail fast instead of 30s default)
+        browser = await chromium.connectOverCDP(wsEndpoint, { timeout: 10000 });
         return browser;
       } finally {
         connectingPromise = null;
@@ -656,7 +656,8 @@ export async function connect(serverUrl = "http://localhost:9222"): Promise<DevB
     ): Promise<FillFormResult> {
       const { timeout = 5000, submit = false, clear = true } = options;
       const page = await getPage(name);
-      const allFrames = page.frames();
+      const mainFrame = page.mainFrame();
+      const iframes = page.frames().filter(f => f !== mainFrame);
 
       const filled: string[] = [];
       const notFound: string[] = [];
@@ -688,32 +689,51 @@ export async function connect(serverUrl = "http://localhost:9222"): Promise<DevB
           `label:has-text("${fieldLabel}") input`,
         ];
 
-        // Try each frame
-        for (const frame of allFrames) {
-          if (found) break;
-
-          for (const selector of selectors) {
-            try {
-              const element = await frame.waitForSelector(selector, {
-                timeout: Math.min(timeout / (allFrames.length * selectors.length), 200),
-                state: "attached",
-              });
-
+        // Phase 1: Try main frame first with instant locator.count() (no timeout wait)
+        for (const selector of selectors) {
+          try {
+            const locator = mainFrame.locator(selector).first();
+            if (await locator.count() > 0) {
+              const element = await locator.elementHandle();
               if (element) {
-                // Clear if requested
                 if (clear) {
-                  await element.click({ clickCount: 3 }); // Select all
+                  await element.click({ clickCount: 3 });
                   await page.keyboard.press("Backspace");
                 }
-
-                // Fill the field
                 await element.fill(value);
                 filled.push(fieldLabel);
                 found = true;
                 break;
               }
-            } catch {
-              // Selector not found in this frame, continue
+            }
+          } catch {
+            // Selector not found in main frame, continue
+          }
+        }
+
+        // Phase 2: Only scan iframes if not found in main frame
+        if (!found && iframes.length > 0) {
+          for (const frame of iframes) {
+            if (found) break;
+            for (const selector of selectors) {
+              try {
+                const element = await frame.waitForSelector(selector, {
+                  timeout: Math.min(timeout / (iframes.length * selectors.length), 200),
+                  state: "attached",
+                });
+                if (element) {
+                  if (clear) {
+                    await element.click({ clickCount: 3 });
+                    await page.keyboard.press("Backspace");
+                  }
+                  await element.fill(value);
+                  filled.push(fieldLabel);
+                  found = true;
+                  break;
+                }
+              } catch {
+                // Selector not found in this iframe, continue
+              }
             }
           }
         }

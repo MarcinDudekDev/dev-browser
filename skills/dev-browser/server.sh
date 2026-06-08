@@ -26,6 +26,9 @@ if [[ ! -d node_modules ]]; then
     fi
 fi
 
+# Ensure node/homebrew is in PATH when launched via nohup (which strips PATH)
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+
 echo "Starting dev-browser server..."
 export HEADLESS=$HEADLESS
 export BROWSER_MODE=${BROWSER_MODE:-dev}

@@ -7,6 +7,7 @@ import {
   type FillFormOptions,
   type FillFormResult,
 } from "./client";
+import { resolveField, smartFill } from "./resolve-field.js";
 
 /**
  * Login pattern options
@@ -151,40 +152,16 @@ export async function fillAndSubmit(
     const notFound: string[] = [];
 
     for (const [label, value] of Object.entries(fields)) {
-      const selectors = [
-        `[name="${label}"]`,
-        `#${label}`,
-        `[placeholder*="${label}" i]`,
-        `[aria-label*="${label}" i]`,
-      ];
-
-      let found = false;
-      for (const selector of selectors) {
-        try {
-          const element = page.locator(selector).first();
-          if ((await element.count()) > 0) {
-            if (clear) {
-              await element.click({ clickCount: 3 });
-              await page.keyboard.press("Backspace");
-            }
-            await element.fill(value);
-            filled.push(label);
-            found = true;
-            break;
-          }
-        } catch {
-          // Try next selector
+      const resolved = await resolveField(page, label);
+      if (resolved) {
+        if (clear) {
+          await resolved.locator.click({ clickCount: 3 });
+          await page.keyboard.press("Backspace");
         }
-      }
-
-      if (!found) {
-        // Try by label text
-        try {
-          await page.getByLabel(label).fill(value);
-          filled.push(label);
-        } catch {
-          notFound.push(label);
-        }
+        await smartFill(resolved, value);
+        filled.push(label);
+      } else {
+        notFound.push(label);
       }
     }
 

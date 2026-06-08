@@ -20,29 +20,29 @@ fi
 
 # 1. Fetch cookies from Cookie Bridge
 cb_result=$(curl -s -m 10 "http://127.0.0.1:${cb_port}/cookies?domain=${domain}&agent_id=dev-browser")
-cb_error=$(echo "$cb_result" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('error',''))" 2>/dev/null)
+cb_error=$(echo "$cb_result" | jq -r '.error // empty' 2>/dev/null)
 if [[ -n "$cb_error" ]]; then
     echo "Cookie Bridge error: $cb_error" >&2
     echo "Make sure Cookie Bridge is running and has an approved session for ${domain}" >&2
     exit 1
 fi
 
-cookie_count=$(echo "$cb_result" | python3 -c "import sys,json; print(json.load(sys.stdin).get('count',0))" 2>/dev/null)
+cookie_count=$(echo "$cb_result" | jq -r '.count // 0' 2>/dev/null)
 if [[ "$cookie_count" == "0" ]]; then
     echo "No cookies found for ${domain}" >&2
     exit 1
 fi
 
 # 2. Extract just the cookies array and inject into dev-browser
-cookies_json=$(echo "$cb_result" | python3 -c "import sys,json; print(json.dumps(json.load(sys.stdin)['cookies']))" 2>/dev/null)
+cookies_json=$(echo "$cb_result" | jq -c '.cookies' 2>/dev/null)
 
 inject_result=$(curl -s -m 10 -X POST "http://localhost:${PORT}/cookies" \
     -H "Content-Type: application/json" \
     -d "{\"cookies\":${cookies_json}}")
 
-inject_error=$(echo "$inject_result" | python3 -c "import sys,json; print(json.load(sys.stdin).get('error',''))" 2>/dev/null)
+inject_error=$(echo "$inject_result" | jq -r '.error // empty' 2>/dev/null)
 if [[ -n "$inject_error" ]]; then
-    echo "Injection failed: $inject_error" >&2
+    echo "inject-cookies failed: $inject_error" >&2
     exit 1
 fi
 

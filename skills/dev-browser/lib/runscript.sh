@@ -80,10 +80,11 @@ run_script() {
         -e '/^[[:space:]]*(import|const|let|var).*\{[^}]*(resolveField|smartFill)[^}]*\}.*from/d' \
         -e '/^[[:space:]]*(import|const|let|var).*\{[^}]*(waitForPageLoad|waitForElement|waitForElementGone|waitForCondition|waitForURL|waitForNetworkIdle)[^}]*\}.*from/d')
 
-    # Create temp script file with .mts extension for ESM support
-    get_project_paths  # sets PROJECT_TMP_DIR
+    # Create temp script inside DEV_BROWSER_DIR so Bun can resolve @/ path alias
+    # from package.json (Bun searches for package.json from script location, not cwd)
+    mkdir -p "$DEV_BROWSER_DIR/tmp"
     local TEMP_SCRIPT
-    TEMP_SCRIPT=$(mktemp "$PROJECT_TMP_DIR/script-XXXXXX")
+    TEMP_SCRIPT=$(mktemp "$DEV_BROWSER_DIR/tmp/script-XXXXXX")
     mv "$TEMP_SCRIPT" "${TEMP_SCRIPT}.mts"
     TEMP_SCRIPT="${TEMP_SCRIPT}.mts"
     trap "rm -f $TEMP_SCRIPT" EXIT
@@ -186,9 +187,7 @@ ENDOFSCRIPT
                 echo "=== SERVER CONNECTION FAILED ===" >&2
                 echo "Attempting recovery (retry $retry_count/$MAX_RETRIES)..." >&2
 
-                # Stop and restart server
-                stop_server 2>/dev/null
-                sleep 1
+                # Restart server (handles stop, lock, and cooldown internally)
                 start_server || {
                     echo "Failed to restart server" >&2
                     echo "$output"

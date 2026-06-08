@@ -22,11 +22,60 @@ export interface DevBrowserServer {
   stop: () => Promise<void>;
 }
 
+// ── Module-scope constants ──────────────────────────────────────
+const HTTP = {
+  OK: 200,
+  BAD_REQUEST: 400,
+  NOT_FOUND: 404,
+  TIMEOUT: 408,
+  GONE: 410,
+  SERVER_ERROR: 500,
+  BAD_GATEWAY: 502,
+  SERVICE_UNAVAILABLE: 503,
+} as const;
+
+const TIMEOUTS = {
+  STALE_PROCESS_KILL: 1000,
+  SETTLE: 2000,
+  NAVIGATION: 3000,
+  SHORT: 5000,
+  MEDIUM: 10000,
+  LONG: 30000,
+} as const;
+
+const LIMITS = {
+  SMALL_STEP: 5,
+  CLICK_PADDING: 8,
+  MEDIUM_STEP: 10,
+  MOVE_STEP: 15,
+  LARGE_STEP: 20,
+  CAPTCHA_OFFSET: 28,
+  SCROLL_STEP: 30,
+  MOUSE_IDLE: 50,
+  MOUSE_RANGE: 60,
+  MOUSE_JITTER: 100,
+  MAX_PAGE_NAME: 256,
+  RETRY_DELAY: 500,
+  MAX_TEXT_LENGTH: 30,
+  MAX_VALUE_LENGTH: 20,
+  MAX_SRC_LENGTH: 60,
+  MAX_IFRAMES: 5,
+  MAX_BUTTONS: 8,
+  MAX_INPUTS: 10,
+  MAX_LINKS: 15,
+} as const;
+
+const DEFAULT_CDP_PORT = 9223;
+const DEFAULT_USER_CDP_PORT = 9222;
+const MAX_PORT = 65535;
+const DEFAULT_MAX_RETRIES = 5;
+const DEFAULT_RETRY_DELAY = 500;
+
 // Helper to retry fetch with exponential backoff
 async function fetchWithRetry(
   url: string,
-  maxRetries = 5,
-  delayMs = 500
+  maxRetries: number = DEFAULT_MAX_RETRIES,
+  delayMilliseconds: number = DEFAULT_RETRY_DELAY
 ): Promise<globalThis.Response> {
   let lastError: Error | null = null;
   for (let i = 0; i < maxRetries; i++) {
@@ -37,7 +86,7 @@ async function fetchWithRetry(
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err));
       if (i < maxRetries - 1) {
-        await new Promise((resolve) => setTimeout(resolve, delayMs * (i + 1)));
+        await new Promise<void>((resolve: () => void): void => { setTimeout(resolve, delayMilliseconds * (i + 1)); });
       }
     }
   }
@@ -45,12 +94,12 @@ async function fetchWithRetry(
 }
 
 // Helper to add timeout to promises
-function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+function withTimeout<T>(promise: Promise<T>, milliseconds: number, message: string): Promise<T> {
   return Promise.race([
     promise,
-    new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error(`Timeout: ${message}`)), ms)
-    ),
+    new Promise<never>((_: unknown, reject: (reason: Error) => void): void => {
+      setTimeout((): void => { reject(new Error(`Timeout: ${message}`)); }, milliseconds);
+    }),
   ]);
 }
 
@@ -146,20 +195,20 @@ const STEALTH_SCRIPT = `
 `;
 
 export async function serve(options: ServeOptions = {}): Promise<DevBrowserServer> {
-  const port = options.port ?? 9222;
+  const port = options.port ?? DEFAULT_USER_CDP_PORT;
   const headless = options.headless ?? false;
-  const cdpPort = options.cdpPort ?? 9223;
+  const cdpPort = options.cdpPort ?? DEFAULT_CDP_PORT;
   const profileDir = options.profileDir;
   const browserMode = options.browserMode ?? "dev";
-  const userCdpPort = options.userCdpPort ?? 9222; // Default user Chrome CDP port
+  const userCdpPort = options.userCdpPort ?? DEFAULT_USER_CDP_PORT; // Default user Chrome CDP port
 
   console.log(`Browser mode: ${browserMode}`);
 
   // Validate port numbers
-  if (port < 1 || port > 65535) {
+  if (port < 1 || port > MAX_PORT) {
     throw new Error(`Invalid port: ${port}. Must be between 1 and 65535`);
   }
-  if (browserMode !== "user" && (cdpPort < 1 || cdpPort > 65535)) {
+  if (browserMode !== "user" && (cdpPort < 1 || cdpPort > MAX_PORT)) {
     throw new Error(`Invalid cdpPort: ${cdpPort}. Must be between 1 and 65535`);
   }
   if (browserMode !== "user" && port === cdpPort) {
@@ -204,16 +253,16 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     try {
       // Quick liveness check — if context is closed this throws
       await context.pages();
-    } catch {
+    } catch { void 0; /* best-effort: browser context dead, relaunching below */
       console.log("Browser context is dead — relaunching...");
       registry.clear();
       // Kill stale Chrome processes holding CDP port before relaunch
       try {
         const { execSync } = await import("child_process");
         // Use fuser instead of lsof (lsof hangs on macOS)
-        execSync(`kill -9 $(fuser ${cdpPort}/tcp 2>/dev/null) 2>/dev/null`, { stdio: "ignore", timeout: 5000 });
-        await new Promise(r => setTimeout(r, 1000));
-      } catch { /* no stale processes */ }
+        execSync(`kill -9 $(fuser ${cdpPort}/tcp 2>/dev/null) 2>/dev/null`, { stdio: "ignore", timeout: TIMEOUTS.SHORT });
+        await new Promise<void>((resolve: () => void): void => { setTimeout(resolve, TIMEOUTS.STALE_PROCESS_KILL); });
+      } catch { void 0; /* cleanup: no stale processes to kill */ }
       await launchBrowserContext();
       console.log("Browser relaunched successfully");
     }
@@ -260,11 +309,11 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
       const restoredPages = context.pages();
       if (restoredPages.length > 0) {
         console.log(`Closing ${restoredPages.length} restored tab(s) from previous session...`);
-        for (const p of restoredPages) {
-          try { await p.close(); } catch { /* already closed */ }
+        for (const restoredPage of restoredPages) {
+          try { await restoredPage.close(); } catch { void 0; /* cleanup: page already closed */ }
         }
       }
-    } catch { /* context may not support pages() yet */ }
+    } catch { void 0; /* best-effort: context may not support pages() yet */ }
   }
 
   console.log(`CDP WebSocket endpoint: ${wsEndpoint}`);
@@ -297,7 +346,7 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
 
   // Helper to get CDP targetId for a page (with timeout to prevent hangs)
   async function getTargetId(page: Page): Promise<string> {
-    return withTimeout((async () => {
+    return withTimeout((async (): Promise<string> => {
       const cdpSession = await context.newCDPSession(page);
       try {
         const { targetInfo } = await cdpSession.send("Target.getTargetInfo");
@@ -305,7 +354,7 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
       } finally {
         await cdpSession.detach();
       }
-    })(), 10000, "getTargetId timed out after 10s");
+    })(), TIMEOUTS.MEDIUM, "getTargetId timed out after 10s");
   }
 
   // Express server for page management
@@ -313,24 +362,24 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
   app.use(express.json());
 
   // GET / - server info
-  app.get("/", (_req: Request, res: Response) => {
+  app.get("/", (_req: Request, res: Response): void => {
     const response: ServerInfoResponse = { wsEndpoint };
     res.json(response);
   });
 
   // GET /health - quick health check (verifies browser context is alive)
-  app.get("/health", async (_req: Request, res: Response) => {
+  app.get("/health", async (_req: Request, res: Response): Promise<void> => {
     try {
       // Verify context is actually functional, not just that Express is running
       await context.pages();
-      res.status(200).send("ok");
-    } catch {
-      res.status(503).send("browser-dead");
+      res.status(HTTP.OK).send("ok");
+    } catch { void 0; /* best-effort: browser context is dead */
+      res.status(HTTP.SERVICE_UNAVAILABLE).send("browser-dead");
     }
   });
 
   // GET /pages - list all pages
-  app.get("/pages", (_req: Request, res: Response) => {
+  app.get("/pages", (_req: Request, res: Response): void => {
     const response: ListPagesResponse = {
       pages: Array.from(registry.keys()),
     };
@@ -343,22 +392,22 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
   });
 
   // POST /pages - get or create page
-  app.post("/pages", async (req: Request, res: Response) => {
+  app.post("/pages", async (req: Request, res: Response): Promise<void> => {
     const body = req.body as GetPageRequest;
     const { name } = body;
 
     if (!name || typeof name !== "string") {
-      res.status(400).json({ error: "name is required and must be a string" });
+      res.status(HTTP.BAD_REQUEST).json({ error: "name is required and must be a string" });
       return;
     }
 
     if (name.length === 0) {
-      res.status(400).json({ error: "name cannot be empty" });
+      res.status(HTTP.BAD_REQUEST).json({ error: "name cannot be empty" });
       return;
     }
 
-    if (name.length > 256) {
-      res.status(400).json({ error: "name must be 256 characters or less" });
+    if (name.length > LIMITS.MAX_PAGE_NAME) {
+      res.status(HTTP.BAD_REQUEST).json({ error: "name must be 256 characters or less" });
       return;
     }
 
@@ -371,13 +420,13 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
         if (entry.page.isClosed()) {
           throw new Error("page closed");
         }
-        await entry.page.evaluate(() => true).catch(async () => {
+        await entry.page.evaluate((): boolean => true).catch(async (): Promise<void> => {
           // Page might be mid-navigation — wait briefly and retry once
-          await new Promise(r => setTimeout(r, 500));
+          await new Promise<void>((resolve: () => void): void => { setTimeout(resolve, LIMITS.RETRY_DELAY); });
           if (entry!.page.isClosed()) throw new Error("page closed");
-          await entry!.page.evaluate(() => true);
+          await entry!.page.evaluate((): boolean => true);
         });
-      } catch {
+      } catch { void 0; /* selector: page is stale, will recreate below */
         // Page is truly dead/closed — remove stale entry and recreate
         console.log(`Page "${name}" was stale, recreating...`);
         registry.delete(name);
@@ -388,62 +437,65 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
       // Ensure browser context is alive (auto-relaunch if crashed)
       await ensureContext();
       // Create new page in the persistent context (with timeout to prevent hangs)
-      const page = await withTimeout(context.newPage(), 30000, "Page creation timed out after 30s");
+      const page = await withTimeout(context.newPage(), TIMEOUTS.LONG, "Page creation timed out after 30s");
 
-      // Inject stealth scripts for stealth mode
+      // Register early to protect from cleanup_orphaned_tabs race:
+      // the cleanup checks registry before closing any tab, so we must
+      // register before doing any async work (stealth injection, etc.)
+      const targetId = await getTargetId(page);
+      entry = { page, targetId };
+      registry.set(name, entry);
+
+      // Clean up registry when page is closed (e.g., user clicks X)
+      page.on("close", (): void => {
+        stopIdleMovement(page);
+        registry.delete(name);
+      });
+
+      // Inject stealth scripts for stealth mode (after registration)
       await injectStealthScripts(page);
 
       // Start idle mouse jitter in stealth mode
       if (browserMode === "stealth") {
         startIdleMovement(page);
       }
-
-      const targetId = await getTargetId(page);
-      entry = { page, targetId };
-      registry.set(name, entry);
-
-      // Clean up registry when page is closed (e.g., user clicks X)
-      page.on("close", () => {
-        stopIdleMovement(page);
-        registry.delete(name);
-      });
     }
 
     // Debug: log what we're returning
     try {
       const url = entry.page.url();
       console.log(`POST /pages "${name}" → targetId=${entry.targetId}, url=${url}`);
-    } catch { /* ignore */ }
+    } catch { void 0; /* best-effort: page may have been closed during logging */ }
 
     const response: GetPageResponse = { wsEndpoint, name, targetId: entry.targetId };
     res.json(response);
   });
 
   // DELETE /pages/:name - close a page
-  app.delete("/pages/:name", async (req: Request<{ name: string }>, res: Response) => {
+  app.delete("/pages/:name", async (req: Request<{ name: string }>, res: Response): Promise<void> => {
     const name = decodeURIComponent(req.params.name);
     const entry = registry.get(name);
 
     if (entry) {
       try {
-        await withTimeout(entry.page.close(), 10000, "page.close() timed out after 10s");
-      } catch { /* force-remove from registry even if close hangs */ }
+        await withTimeout(entry.page.close(), TIMEOUTS.MEDIUM, "page.close() timed out after 10s");
+      } catch { void 0; /* cleanup: force-remove from registry even if close hangs */ }
       registry.delete(name);
       res.json({ success: true });
       return;
     }
 
-    res.status(404).json({ error: "page not found" });
+    res.status(HTTP.NOT_FOUND).json({ error: "page not found" });
   });
 
   // POST /pages/:name/screenshot - take screenshot using server's Page object
   // This avoids stale CDP reconnection issues
-  app.post("/pages/:name/screenshot", async (req: Request<{ name: string }>, res: Response) => {
+  app.post("/pages/:name/screenshot", async (req: Request<{ name: string }>, res: Response): Promise<void> => {
     const name = decodeURIComponent(req.params.name);
     const entry = registry.get(name);
 
     if (!entry) {
-      res.status(404).json({ error: `Page "${name}" not found` });
+      res.status(HTTP.NOT_FOUND).json({ error: `Page "${name}" not found` });
       return;
     }
 
@@ -453,242 +505,242 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
       if (selector) {
         // Element-level screenshot: scroll into view + clip to element bounds
         const locator = entry.page.locator(selector).first();
-        await locator.scrollIntoViewIfNeeded({ timeout: 5000 });
+        await locator.scrollIntoViewIfNeeded({ timeout: TIMEOUTS.SHORT });
         await locator.screenshot({ path: screenshotPath });
       } else {
         await entry.page.screenshot({ path: screenshotPath, fullPage: fullPage !== false });
       }
       const url = entry.page.url();
-      const vp = entry.page.viewportSize() ?? await entry.page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight })).catch(() => null);
-      const vpStr = vp ? `${vp.width}x${vp.height}` : 'unknown';
+      const viewport = entry.page.viewportSize() ?? await entry.page.evaluate((): { width: number; height: number } => ({ width: window.innerWidth, height: window.innerHeight })).catch((): null => null);
+      const vpStr = viewport ? `${viewport.width}x${viewport.height}` : 'unknown';
       console.log(`Screenshot "${name}" → ${screenshotPath} (url=${url}${selector ? `, selector=${selector}` : ''})`);
       res.json({ success: true, path: screenshotPath, url, viewport: vpStr });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      res.status(500).json({ error: msg });
+      res.status(HTTP.SERVER_ERROR).json({ error: msg });
     }
   });
 
   // POST /pages/:name/aria - get ARIA accessibility snapshot using server's Page object
   // This avoids client-side connectOverCDP which can timeout on heavy pages
-  app.post("/pages/:name/aria", async (req: Request<{ name: string }>, res: Response) => {
+  app.post("/pages/:name/aria", async (req: Request<{ name: string }>, res: Response): Promise<void> => {
     const name = decodeURIComponent(req.params.name);
     const entry = registry.get(name);
 
     if (!entry) {
-      res.status(404).json({ error: `Page "${name}" not found` });
+      res.status(HTTP.NOT_FOUND).json({ error: `Page "${name}" not found` });
       return;
     }
 
     try {
       const snapshotScript = getSnapshotScript();
-      const snapshot = await withTimeout(entry.page.evaluate((script: string) => {
+      const snapshot = await withTimeout(entry.page.evaluate((script: string): any => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const w = globalThis as any;
-        if (!w.__devBrowser_getAISnapshot) {
+        const globals = globalThis as any;
+        if (!globals.__devBrowser_getAISnapshot) {
           // eslint-disable-next-line no-eval
           eval(script);
         }
-        return w.__devBrowser_getAISnapshot();
-      }, snapshotScript), 30000, "ARIA snapshot timed out after 30s");
+        return globals.__devBrowser_getAISnapshot();
+      }, snapshotScript), TIMEOUTS.LONG, "ARIA snapshot timed out after 30s");
       res.json({ success: true, snapshot });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      res.status(500).json({ error: msg });
+      res.status(HTTP.SERVER_ERROR).json({ error: msg });
     }
   });
 
   // POST /pages/:name/evaluate - evaluate JS using server's Page object
-  app.post("/pages/:name/evaluate", async (req: Request<{ name: string }>, res: Response) => {
+  app.post("/pages/:name/evaluate", async (req: Request<{ name: string }>, res: Response): Promise<void> => {
     const name = decodeURIComponent(req.params.name);
     const entry = registry.get(name);
 
     if (!entry) {
-      res.status(404).json({ error: `Page "${name}" not found` });
+      res.status(HTTP.NOT_FOUND).json({ error: `Page "${name}" not found` });
       return;
     }
 
     try {
       const { code } = req.body as { code: string };
-      const result = await withTimeout(entry.page.evaluate((js: string) => {
+      const result = await withTimeout(entry.page.evaluate((script: string): any => {
         try {
-          const fn = new Function(`return (${js})`);
-          const res = fn();
-          if (res && typeof res.then === 'function') {
-            return res.then((r: unknown) => ({ success: true, result: r }));
+          const fn = new Function(`return (${script})`);
+          const fnResult = fn();
+          if (fnResult && typeof fnResult.then === 'function') {
+            return fnResult.then((resolved: unknown): { success: boolean; result: unknown } => ({ success: true, result: resolved }));
           }
-          return { success: true, result: res };
-        } catch {
-          try { const fn = new Function(js); fn(); return { success: true, result: undefined }; }
-          catch (e: unknown) { return { success: false, error: e instanceof Error ? e.message : String(e) }; }
+          return { success: true, result: fnResult };
+        } catch { void 0; /* selector: expression failed, try as statement */
+          try { const fn = new Function(script); fn(); return { success: true, result: undefined }; }
+          catch (execError: unknown) { return { success: false, error: execError instanceof Error ? execError.message : String(execError) }; }
         }
-      }, code), 30000, "page.evaluate() timed out after 30s");
+      }, code), TIMEOUTS.LONG, "page.evaluate() timed out after 30s");
       res.json(result);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      res.status(500).json({ success: false, error: msg });
+      res.status(HTTP.SERVER_ERROR).json({ success: false, error: msg });
     }
   });
 
   // POST /pages/:name/resize - resize viewport using server's Page object
-  app.post("/pages/:name/resize", async (req: Request<{ name: string }>, res: Response) => {
+  app.post("/pages/:name/resize", async (req: Request<{ name: string }>, res: Response): Promise<void> => {
     const name = decodeURIComponent(req.params.name);
     const entry = registry.get(name);
 
     if (!entry) {
-      res.status(404).json({ error: `Page "${name}" not found` });
+      res.status(HTTP.NOT_FOUND).json({ error: `Page "${name}" not found` });
       return;
     }
 
     try {
       const { width, height } = req.body as { width: number; height: number };
       if (!width || !height) {
-        res.status(400).json({ error: "width and height are required" });
+        res.status(HTTP.BAD_REQUEST).json({ error: "width and height are required" });
         return;
       }
       await entry.page.setViewportSize({ width, height });
-      const vp = entry.page.viewportSize();
-      console.log(`Resize "${name}" → ${vp?.width}x${vp?.height}`);
-      res.json({ success: true, width: vp?.width, height: vp?.height });
+      const viewport = entry.page.viewportSize();
+      console.log(`Resize "${name}" → ${viewport?.width}x${viewport?.height}`);
+      res.json({ success: true, width: viewport?.width, height: viewport?.height });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      res.status(500).json({ error: msg });
+      res.status(HTTP.SERVER_ERROR).json({ error: msg });
     }
   });
 
   // POST /cookies - inject cookies into browser context via Playwright addCookies()
   // Uses context-level API which properly handles domain matching, secure flags, httpOnly
-  app.post("/cookies", async (req: Request, res: Response) => {
+  app.post("/cookies", async (req: Request, res: Response): Promise<void> => {
     try {
       const { cookies } = req.body as { cookies: Array<Record<string, unknown>> };
       if (!cookies || !Array.isArray(cookies) || cookies.length === 0) {
-        res.status(400).json({ error: "cookies array is required and must not be empty" });
+        res.status(HTTP.BAD_REQUEST).json({ error: "cookies array is required and must not be empty" });
         return;
       }
 
       // Convert Chrome extension cookie format to Playwright format
-      const playwrightCookies = cookies.map(c => {
+      const playwrightCookies = cookies.map((cookieData: Record<string, unknown>): Record<string, unknown> => {
         const cookie: Record<string, unknown> = {
-          name: String(c.name || ""),
-          value: String(c.value || ""),
-          domain: String(c.domain || ""),
-          path: String(c.path || "/"),
+          name: String(cookieData.name || ""),
+          value: String(cookieData.value || ""),
+          domain: String(cookieData.domain || ""),
+          path: String(cookieData.path || "/"),
         };
-        if (c.expirationDate && Number(c.expirationDate) > 0) {
-          cookie.expires = Number(c.expirationDate);
+        if (cookieData.expirationDate && Number(cookieData.expirationDate) > 0) {
+          cookie.expires = Number(cookieData.expirationDate);
         }
-        if (c.httpOnly !== undefined) cookie.httpOnly = Boolean(c.httpOnly);
-        if (c.secure !== undefined) cookie.secure = Boolean(c.secure);
-        if (c.sameSite) {
+        if (cookieData.httpOnly !== undefined) cookie.httpOnly = Boolean(cookieData.httpOnly);
+        if (cookieData.secure !== undefined) cookie.secure = Boolean(cookieData.secure);
+        if (cookieData.sameSite) {
           // Chrome uses lowercase, Playwright uses capitalized
-          const ss = String(c.sameSite).toLowerCase();
-          if (ss === "strict") cookie.sameSite = "Strict";
-          else if (ss === "lax") cookie.sameSite = "Lax";
-          else if (ss === "none") cookie.sameSite = "None";
+          const sameSite = String(cookieData.sameSite).toLowerCase();
+          if (sameSite === "strict") cookie.sameSite = "Strict";
+          else if (sameSite === "lax") cookie.sameSite = "Lax";
+          else if (sameSite === "none") cookie.sameSite = "None";
         }
         return cookie;
       });
 
       await context.addCookies(playwrightCookies as Parameters<typeof context.addCookies>[0]);
-      console.log(`Injected ${playwrightCookies.length} cookies (domains: ${[...new Set(playwrightCookies.map(c => c.domain))].join(", ")})`);
+      console.log(`Injected ${playwrightCookies.length} cookies (domains: ${[...new Set(playwrightCookies.map((cookieData: Record<string, unknown>): unknown => cookieData.domain))].join(", ")})`);
       res.json({ success: true, count: playwrightCookies.length });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      res.status(500).json({ error: msg });
+      res.status(HTTP.SERVER_ERROR).json({ error: msg });
     }
   });
 
   // GET /pages/:name/url - get current page URL from server's Page object
-  app.get("/pages/:name/url", (req: Request<{ name: string }>, res: Response) => {
+  app.get("/pages/:name/url", (req: Request<{ name: string }>, res: Response): void => {
     const name = decodeURIComponent(req.params.name);
     const entry = registry.get(name);
 
     if (!entry) {
-      res.status(404).json({ error: `Page "${name}" not found` });
+      res.status(HTTP.NOT_FOUND).json({ error: `Page "${name}" not found` });
       return;
     }
 
     try {
       res.json({ url: entry.page.url(), name });
-    } catch {
+    } catch { void 0; /* navigation: page may have been closed */
       registry.delete(name);
-      res.status(410).json({ error: `Page "${name}" was closed` });
+      res.status(HTTP.GONE).json({ error: `Page "${name}" was closed` });
     }
   });
 
   // ── Fast-path endpoints (skip tsx) ──────────────────────────────
 
   // Helper: get page entry or 404
-  const getPageEntry = (req: Request<{ name: string }>, res: Response) => {
+  const getPageEntry = (req: Request<{ name: string }>, res: Response): { name: string; entry: PageEntry } | null => {
     const name = decodeURIComponent(req.params.name);
     const entry = registry.get(name);
     if (!entry) {
-      res.status(404).json({ error: `Page "${name}" not found` });
+      res.status(HTTP.NOT_FOUND).json({ error: `Page "${name}" not found` });
       return null;
     }
     return { name, entry };
   };
 
   // POST /pages/:name/goto - navigate to URL
-  app.post("/pages/:name/goto", async (req: Request<{ name: string }>, res: Response) => {
-    const r = getPageEntry(req, res);
-    if (!r) return;
-    const { entry } = r;
+  app.post("/pages/:name/goto", async (req: Request<{ name: string }>, res: Response): Promise<void> => {
+    const pageEntry = getPageEntry(req, res);
+    if (!pageEntry) return;
+    const { entry } = pageEntry;
     try {
       let { url, cachebust } = req.body as { url: string; cachebust?: boolean };
-      if (!url) { res.status(400).json({ error: "url is required" }); return; }
+      if (!url) { res.status(HTTP.BAD_REQUEST).json({ error: "url is required" }); return; }
       if (cachebust && url !== "about:blank") {
         const sep = url.includes("?") ? "&" : "?";
         url = `${url}${sep}v=${Date.now()}`;
       }
       try {
-        await entry.page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
-      } catch (navErr: any) {
+        await entry.page.goto(url, { waitUntil: "domcontentloaded", timeout: TIMEOUTS.LONG });
+      } catch (navigationError: unknown) {
         // Fail fast on connection errors instead of waiting for full timeout
-        const msg = navErr?.message || "";
+        const msg = navigationError instanceof Error ? navigationError.message : String(navigationError);
         if (msg.includes("ERR_CONNECTION_REFUSED") || msg.includes("ERR_CONNECTION_RESET") || msg.includes("ERR_NAME_NOT_RESOLVED") || msg.includes("ERR_ADDRESS_UNREACHABLE")) {
-          res.status(502).json({ error: msg.split("\n")[0] });
+          res.status(HTTP.BAD_GATEWAY).json({ error: msg.split("\n")[0] });
           return;
         }
-        throw navErr;
+        throw navigationError;
       }
-      try { await entry.page.waitForLoadState("networkidle", { timeout: 10000 }); } catch { /* proceed */ }
+      try { await entry.page.waitForLoadState("networkidle", { timeout: TIMEOUTS.MEDIUM }); } catch { void 0; /* best-effort: proceed if network idle times out */ }
 
-      const pageState = await entry.page.evaluate(() => {
+      const pageState = await entry.page.evaluate((limits: any): string => {
         const doc = document;
         const lines: string[] = [];
         // Forms summary
-        doc.querySelectorAll("form").forEach((form) => {
+        doc.querySelectorAll("form").forEach((form: any): void => {
           const id = form.id || form.getAttribute("name") || "(unnamed)";
           const fields: string[] = [];
-          form.querySelectorAll("input, select, textarea").forEach((el) => {
-            const inp = el as HTMLInputElement;
+          form.querySelectorAll("input, select, textarea").forEach((element: any): void => {
+            const inp = element as HTMLInputElement;
             const name = inp.name || inp.id || inp.placeholder || inp.type;
-            if (name && inp.type !== "hidden") fields.push(`${name}[${inp.type || el.tagName.toLowerCase()}]`);
+            if (name && inp.type !== "hidden") fields.push(`${name}[${inp.type || element.tagName.toLowerCase()}]`);
           });
           if (fields.length > 0) lines.push(`Form #${id}: ${fields.join(", ")}`);
         });
         // Standalone inputs
         const standalone: string[] = [];
-        doc.querySelectorAll("input:not(form input), select:not(form select), textarea:not(form textarea)").forEach((el) => {
-          const inp = el as HTMLInputElement;
+        doc.querySelectorAll("input:not(form input), select:not(form select), textarea:not(form textarea)").forEach((element: any): void => {
+          const inp = element as HTMLInputElement;
           const name = inp.name || inp.id || inp.placeholder || inp.type;
-          if (name && inp.type !== "hidden") standalone.push(`${name}[${inp.type || el.tagName.toLowerCase()}]`);
+          if (name && inp.type !== "hidden") standalone.push(`${name}[${inp.type || element.tagName.toLowerCase()}]`);
         });
-        if (standalone.length > 0) lines.push(`Inputs: ${standalone.slice(0, 10).join(", ")}`);
+        if (standalone.length > 0) lines.push(`Inputs: ${standalone.slice(0, limits.maxInputs).join(", ")}`);
         // Buttons
         const buttons: string[] = [];
-        doc.querySelectorAll('button, input[type="submit"], [role="button"]').forEach((el) => {
-          const text = (el.textContent || (el as HTMLInputElement).value || "").trim().substring(0, 30);
+        doc.querySelectorAll('button, input[type="submit"], [role="button"]').forEach((element: any): void => {
+          const text = (element.textContent || (element as HTMLInputElement).value || "").trim().substring(0, limits.maxText);
           if (text && !buttons.includes(text)) buttons.push(text);
         });
-        if (buttons.length > 0) lines.push(`Buttons: ${buttons.slice(0, 8).join(", ")}`);
+        if (buttons.length > 0) lines.push(`Buttons: ${buttons.slice(0, limits.maxButtons).join(", ")}`);
         // Iframes
         const iframes = doc.querySelectorAll("iframe");
         if (iframes.length > 0) {
-          const info = Array.from(iframes).slice(0, 5).map(f => {
-            const name = f.name || f.id || "";
-            const src = f.src?.substring(0, 60) || "";
+          const info = Array.from(iframes).slice(0, limits.maxIframes).map((frame: any): string => {
+            const name = frame.name || frame.id || "";
+            const src = frame.src?.substring(0, limits.maxSrc) || "";
             return name ? `${name}(${src})` : src;
           }).filter(Boolean);
           if (info.length > 0) lines.push(`Iframes: ${info.join(", ")}`);
@@ -696,55 +748,116 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
         // Links
         const links: string[] = [];
         const seen = new Set<string>();
-        doc.querySelectorAll("a[href]").forEach((el) => {
-          const text = (el.textContent || "").trim().substring(0, 30);
-          const href = el.getAttribute("href") || "";
+        doc.querySelectorAll("a[href]").forEach((element: any): void => {
+          const text = (element.textContent || "").trim().substring(0, limits.maxText);
+          const href = element.getAttribute("href") || "";
           if (text && !seen.has(text) && href !== "#" && !href.startsWith("javascript:") && !href.startsWith("mailto:")) {
             seen.add(text);
             links.push(text);
           }
         });
-        if (links.length > 0) lines.push(`Links: ${links.slice(0, 15).join(", ")}`);
+        if (links.length > 0) lines.push(`Links: ${links.slice(0, limits.maxLinks).join(", ")}`);
         return lines.join("\n");
-      });
+      }, { maxText: LIMITS.MAX_TEXT_LENGTH, maxInputs: LIMITS.MAX_INPUTS, maxButtons: LIMITS.MAX_BUTTONS, maxIframes: LIMITS.MAX_IFRAMES, maxSrc: LIMITS.MAX_SRC_LENGTH, maxLinks: LIMITS.MAX_LINKS });
       res.json({ url: entry.page.url(), title: await entry.page.title(), state: pageState });
     } catch (err) {
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+      res.status(HTTP.SERVER_ERROR).json({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
-  // POST /pages/:name/click - click element by text or CSS selector
-  app.post("/pages/:name/click", async (req: Request<{ name: string }>, res: Response) => {
-    const r = getPageEntry(req, res);
-    if (!r) return;
-    const { entry } = r;
+  // POST /pages/:name/click - click element by text, ARIA ref, or CSS selector
+  app.post("/pages/:name/click", async (req: Request<{ name: string }>, res: Response): Promise<void> => {
+    const pageEntry = getPageEntry(req, res);
+    if (!pageEntry) return;
+    const { entry } = pageEntry;
     try {
-      const { target } = req.body as { target: string };
-      if (!target) { res.status(400).json({ error: "target is required" }); return; }
+      const { target, force } = req.body as { target: string; force?: boolean };
+      if (!target) { res.status(HTTP.BAD_REQUEST).json({ error: "target is required" }); return; }
 
       let clickedType = "";
       let clicked = false;
 
+      // Force click helper - dispatches JS events directly (bypasses actionability)
+      const forceClickHandle = async (handle: import("playwright").ElementHandle): Promise<void> => {
+        await handle.evaluate((node: any): void => {
+          node.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+          node.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+          node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+          if (typeof node.click === 'function') node.click();
+        });
+      };
+
+      // ARIA ref click (e.g., e1, e5, e123) — uses server-side page object, no connectOverCDP
+      if (/^e\d+$/.test(target)) {
+        const elementHandle = await entry.page.evaluateHandle((refId: string): any => {
+          const globals = globalThis as any;
+          const refs = globals.__devBrowserRefs;
+          if (!refs) throw new Error("No snapshot refs found. Run 'aria' first.");
+          const element = refs[refId];
+          if (!element) throw new Error(`Ref "${refId}" not found. Available: ${Object.keys(refs).join(", ")}`);
+          return element;
+        }, target);
+        const element = elementHandle.asElement();
+        if (!element) {
+          await elementHandle.dispose();
+          res.status(HTTP.NOT_FOUND).json({ error: `Ref '${target}' did not resolve to an element. Run 'aria' to refresh.` });
+          return;
+        }
+        if (force) {
+          await forceClickHandle(element);
+        } else {
+          await element.click();
+        }
+        await elementHandle.dispose();
+        clickedType = "ref";
+        clicked = true;
+        // Wait for navigation/load
+        try { await entry.page.waitForLoadState("domcontentloaded", { timeout: TIMEOUTS.SHORT }); } catch { void 0; /* best-effort: proceed if load state times out */ }
+        const clickState = await entry.page.evaluate((limits: any): string => {
+          const doc = document;
+          const lines: string[] = [];
+          doc.querySelectorAll("form").forEach((form: any): void => {
+            const id = form.id || form.getAttribute("name") || "(unnamed)";
+            const fields: string[] = [];
+            form.querySelectorAll("input, select, textarea").forEach((element: any): void => {
+              const inp = element as HTMLInputElement;
+              const name = inp.name || inp.id || inp.placeholder || inp.type;
+              if (name && inp.type !== "hidden") fields.push(`${name}[${inp.type || element.tagName.toLowerCase()}]`);
+            });
+            if (fields.length > 0) lines.push(`Form #${id}: ${fields.join(", ")}`);
+          });
+          const buttons: string[] = [];
+          doc.querySelectorAll('button, input[type="submit"], [role="button"]').forEach((element: any): void => {
+            const text = (element.textContent || (element as HTMLInputElement).value || "").trim().substring(0, limits.maxText);
+            if (text && !buttons.includes(text)) buttons.push(text);
+          });
+          if (buttons.length > 0) lines.push(`Buttons: ${buttons.slice(0, limits.maxButtons).join(", ")}`);
+          return lines.join("\n");
+        }, { maxText: LIMITS.MAX_TEXT_LENGTH, maxButtons: LIMITS.MAX_BUTTONS });
+        res.json({ clicked: target, type: clickedType, url: entry.page.url(), title: await entry.page.title(), state: clickState });
+        return;
+      }
+
       // Human mouse movement helper for stealth mode
-      const stealthMoveToLocator = async (locator: import("playwright").Locator) => {
+      const stealthMoveToLocator = async (locator: import("playwright").Locator): Promise<void> => {
         if (browserMode !== "stealth") return;
         try {
           const center = await getElementCenter(locator);
           await humanMouseMove(entry.page, center.x, center.y);
-          await new Promise(r => setTimeout(r, 50 + Math.random() * 100));
-        } catch { /* element may not be visible yet */ }
+          await new Promise<void>((resolve: () => void): void => { setTimeout(resolve, LIMITS.MOUSE_IDLE + Math.random() * LIMITS.MOUSE_JITTER); });
+        } catch { void 0; /* best-effort: element may not be visible yet */ }
       };
 
       // Try button role
-      try { const loc = entry.page.getByRole("button", { name: target }); await stealthMoveToLocator(loc); await loc.click({ timeout: 3000 }); clickedType = "button"; clicked = true; } catch {}
+      try { const loc = entry.page.getByRole("button", { name: target }); await stealthMoveToLocator(loc); await loc.click({ timeout: TIMEOUTS.NAVIGATION }); clickedType = "button"; clicked = true; } catch { void 0; /* selector: try next matching strategy */ }
       // Try link role
-      if (!clicked) { try { const loc = entry.page.getByRole("link", { name: target }); await stealthMoveToLocator(loc); await loc.click({ timeout: 3000 }); clickedType = "link"; clicked = true; } catch {} }
+      if (!clicked) { try { const loc = entry.page.getByRole("link", { name: target }); await stealthMoveToLocator(loc); await loc.click({ timeout: TIMEOUTS.NAVIGATION }); clickedType = "link"; clicked = true; } catch { void 0; /* selector: try next matching strategy */ } }
       // Try frames
       if (!clicked) {
         for (const frame of entry.page.frames()) {
           if (clicked) break;
-          try { const loc = frame.getByRole("button", { name: target }); await loc.click({ timeout: 2000 }); clickedType = "button (frame)"; clicked = true; } catch {
-            try { const loc = frame.getByRole("link", { name: target }); await loc.click({ timeout: 2000 }); clickedType = "link (frame)"; clicked = true; } catch {}
+          try { const loc = frame.getByRole("button", { name: target }); await loc.click({ timeout: TIMEOUTS.SETTLE }); clickedType = "button (frame)"; clicked = true; } catch { void 0; /* selector: try next matching strategy */
+            try { const loc = frame.getByRole("link", { name: target }); await loc.click({ timeout: TIMEOUTS.SETTLE }); clickedType = "link (frame)"; clicked = true; } catch { void 0; /* selector: try next matching strategy */ }
           }
         }
       }
@@ -762,201 +875,554 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
                 const iframeLoc = entry.page.locator(`iframe[src*="${new URL(frameUrl).hostname}"]`).first();
                 const iframeBox = await Promise.race([
                   iframeLoc.boundingBox(),
-                  new Promise<null>((resolve) => setTimeout(() => resolve(null), 2000)),
+                  new Promise<null>((resolve: (value: null) => void): void => { setTimeout((): void => { resolve(null); }, TIMEOUTS.SETTLE); }),
                 ]);
                 if (iframeBox) {
                   // Click near the checkbox area (typically ~28px from left, center vertically, capped at 28px from top)
-                  const clickX = iframeBox.x + 28;
-                  const clickY = iframeBox.y + Math.min(iframeBox.height / 2, 28);
+                  const clickX = iframeBox.x + LIMITS.CAPTCHA_OFFSET;
+                  const clickY = iframeBox.y + Math.min(iframeBox.height / 2, LIMITS.CAPTCHA_OFFSET);
                   if (browserMode === "stealth") {
                     await humanMouseMove(entry.page, clickX, clickY);
-                    await new Promise(r => setTimeout(r, 50 + Math.random() * 100));
+                    await new Promise<void>((resolve: () => void): void => { setTimeout(resolve, LIMITS.MOUSE_IDLE + Math.random() * LIMITS.MOUSE_JITTER); });
                   }
                   await entry.page.mouse.click(clickX, clickY);
                   clickedType = "iframe-coordinates";
                   clicked = true;
                 }
               }
-            } catch { /* frame may be detached */ }
+            } catch { void 0; /* best-effort: frame may be detached */ }
           }
-        } catch { /* ignore */ }
+        } catch { void 0; /* best-effort: iframe coordinate click failed */ }
       }
       // CSS selector fallback
-      if (!clicked) { const loc = entry.page.locator(target).first(); await stealthMoveToLocator(loc); await loc.click({ timeout: 5000 }); clickedType = "selector"; }
+      if (!clicked) { const loc = entry.page.locator(target).first(); await stealthMoveToLocator(loc); await loc.click({ timeout: TIMEOUTS.SHORT }); clickedType = "selector"; }
 
-      try { await entry.page.waitForLoadState("domcontentloaded", { timeout: 5000 }); } catch {}
-      const clickState = await entry.page.evaluate(() => {
+      try { await entry.page.waitForLoadState("domcontentloaded", { timeout: TIMEOUTS.SHORT }); } catch { void 0; /* best-effort: proceed if load state times out */ }
+      const clickState = await entry.page.evaluate((limits: any): string => {
         const doc = document;
         const lines: string[] = [];
-        doc.querySelectorAll("form").forEach((form) => {
+        doc.querySelectorAll("form").forEach((form: any): void => {
           const id = form.id || form.getAttribute("name") || "(unnamed)";
           const fields: string[] = [];
-          form.querySelectorAll("input, select, textarea").forEach((el) => {
-            const inp = el as HTMLInputElement;
+          form.querySelectorAll("input, select, textarea").forEach((element: any): void => {
+            const inp = element as HTMLInputElement;
             const name = inp.name || inp.id || inp.placeholder || inp.type;
-            if (name && inp.type !== "hidden") fields.push(`${name}[${inp.type || el.tagName.toLowerCase()}]`);
+            if (name && inp.type !== "hidden") fields.push(`${name}[${inp.type || element.tagName.toLowerCase()}]`);
           });
           if (fields.length > 0) lines.push(`Form #${id}: ${fields.join(", ")}`);
         });
         const buttons: string[] = [];
-        doc.querySelectorAll('button, input[type="submit"], [role="button"]').forEach((el) => {
-          const text = (el.textContent || (el as HTMLInputElement).value || "").trim().substring(0, 30);
+        doc.querySelectorAll('button, input[type="submit"], [role="button"]').forEach((element: any): void => {
+          const text = (element.textContent || (element as HTMLInputElement).value || "").trim().substring(0, limits.maxText);
           if (text && !buttons.includes(text)) buttons.push(text);
         });
-        if (buttons.length > 0) lines.push(`Buttons: ${buttons.slice(0, 8).join(", ")}`);
+        if (buttons.length > 0) lines.push(`Buttons: ${buttons.slice(0, limits.maxButtons).join(", ")}`);
         return lines.join("\n");
-      });
+      }, { maxText: LIMITS.MAX_TEXT_LENGTH, maxButtons: LIMITS.MAX_BUTTONS });
       res.json({ clicked: target, type: clickedType, url: entry.page.url(), title: await entry.page.title(), state: clickState });
     } catch (err) {
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+      res.status(HTTP.SERVER_ERROR).json({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
   // POST /pages/:name/mouse-click - click at viewport coordinates (for iframe content like CAPTCHAs)
-  app.post("/pages/:name/mouse-click", async (req: Request<{ name: string }>, res: Response) => {
-    const r = getPageEntry(req, res);
-    if (!r) return;
-    const { entry } = r;
+  app.post("/pages/:name/mouse-click", async (req: Request<{ name: string }>, res: Response): Promise<void> => {
+    const pageEntry = getPageEntry(req, res);
+    if (!pageEntry) return;
+    const { entry } = pageEntry;
     try {
       const { x, y } = req.body as { x: number; y: number };
-      if (typeof x !== "number" || typeof y !== "number") { res.status(400).json({ error: "x and y coordinates are required" }); return; }
+      if (typeof x !== "number" || typeof y !== "number") { res.status(HTTP.BAD_REQUEST).json({ error: "x and y coordinates are required" }); return; }
       if (browserMode === "stealth") {
         await humanMouseMove(entry.page, x, y);
-        await new Promise(r => setTimeout(r, 50 + Math.random() * 100));
+        await new Promise<void>((resolve: () => void): void => { setTimeout(resolve, LIMITS.MOUSE_IDLE + Math.random() * LIMITS.MOUSE_JITTER); });
       }
       await entry.page.mouse.click(x, y);
       res.json({ clicked: { x, y }, url: entry.page.url() });
     } catch (err) {
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+      res.status(HTTP.SERVER_ERROR).json({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
-  // POST /pages/:name/fill - fill form field by name/id/label/selector
-  app.post("/pages/:name/fill", async (req: Request<{ name: string }>, res: Response) => {
-    const r = getPageEntry(req, res);
-    if (!r) return;
-    const { entry } = r;
+  // POST /pages/:name/fill - fill form field by name/id/label/selector/ARIA ref
+  app.post("/pages/:name/fill", async (req: Request<{ name: string }>, res: Response): Promise<void> => {
+    const pageEntry = getPageEntry(req, res);
+    if (!pageEntry) return;
+    const { entry } = pageEntry;
     try {
       const { target, value } = req.body as { target: string; value: string };
-      if (!target || value === undefined) { res.status(400).json({ error: "target and value are required" }); return; }
+      if (!target || value === undefined) { res.status(HTTP.BAD_REQUEST).json({ error: "target and value are required" }); return; }
 
       let filled = false;
       let filledWith = "";
 
+      // ARIA ref fill (e.g., e1, e5) — uses server-side page object, no connectOverCDP
+      if (/^e\d+$/.test(target)) {
+        const elementHandle = await entry.page.evaluateHandle((refId: string): any => {
+          const globals = globalThis as any;
+          const refs = globals.__devBrowserRefs;
+          if (!refs) throw new Error("No snapshot refs found. Run 'aria' first.");
+          const element = refs[refId];
+          if (!element) throw new Error(`Ref "${refId}" not found. Available: ${Object.keys(refs).join(", ")}`);
+          return element;
+        }, target);
+        const element = elementHandle.asElement();
+        if (!element) {
+          await elementHandle.dispose();
+          res.status(HTTP.NOT_FOUND).json({ error: `Ref '${target}' did not resolve to an element. Run 'aria' to refresh.` });
+          return;
+        }
+        // Determine element type and fill appropriately
+        const tagInfo = await element.evaluate((node: any): { tag: string; type: string; isContentEditable: boolean } => ({
+          tag: node.tagName.toLowerCase(),
+          type: node.type?.toLowerCase() || "",
+          isContentEditable: node.isContentEditable,
+        }));
+        if (tagInfo.tag === "select") {
+          await element.evaluate((node: any, val: string): void => {
+            // Try by value first, then by visible text
+            const byValue: any = Array.from(node.options).find((option: any): boolean => option.value === val);
+            const byText: any = Array.from(node.options).find((option: any): boolean => option.textContent?.trim() === val);
+            const option: any = byValue || byText;
+            if (option) { node.value = option.value; node.dispatchEvent(new Event('change', { bubbles: true })); }
+          }, value);
+          filledWith = "ref (select)";
+        } else if (tagInfo.type === "checkbox" || tagInfo.type === "radio") {
+          const shouldCheck = value === "true" || value === "1" || value === "on" || value === "yes";
+          await element.evaluate((node: any, check: boolean): void => {
+            if (node.checked !== check) { node.click(); }
+          }, shouldCheck);
+          filledWith = `ref (${tagInfo.type})`;
+        } else {
+          // Text input / textarea / contenteditable
+          await element.click();
+          await element.evaluate((node: any): void => { node.value = ""; node.dispatchEvent(new Event('input', { bubbles: true })); });
+          await element.type(value);
+          filledWith = "ref (type)";
+        }
+        await elementHandle.dispose();
+        filled = true;
+        const fillState = await entry.page.evaluate((limits: any): string => {
+          const doc = document;
+          const lines: string[] = [];
+          doc.querySelectorAll("form").forEach((form: any): void => {
+            const id = form.id || form.getAttribute("name") || "(unnamed)";
+            const fields: string[] = [];
+            form.querySelectorAll("input, select, textarea").forEach((element: any): void => {
+              const inp = element as HTMLInputElement;
+              const name = inp.name || inp.id || inp.placeholder || inp.type;
+              if (name && inp.type !== "hidden") {
+                const val = inp.value ? ` ="${inp.value.substring(0, limits.maxValue)}"` : "";
+                fields.push(`${name}[${inp.type || element.tagName.toLowerCase()}]${val}`);
+              }
+            });
+            if (fields.length > 0) lines.push(`Form #${id}: ${fields.join(", ")}`);
+          });
+          const buttons: string[] = [];
+          doc.querySelectorAll('button, input[type="submit"], [role="button"]').forEach((element: any): void => {
+            const text = (element.textContent || (element as HTMLInputElement).value || "").trim().substring(0, limits.maxText);
+            if (text && !buttons.includes(text)) buttons.push(text);
+          });
+          if (buttons.length > 0) lines.push(`Buttons: ${buttons.slice(0, limits.maxButtons).join(", ")}`);
+          return lines.join("\n");
+        }, { maxText: LIMITS.MAX_TEXT_LENGTH, maxButtons: LIMITS.MAX_BUTTONS, maxValue: LIMITS.MAX_VALUE_LENGTH });
+        res.json({ filled: target, value, selector: filledWith, state: fillState });
+        return;
+      }
+
       // Human mouse movement helper for stealth mode
-      const stealthMoveToEl = async (el: import("playwright").Locator) => {
+      const stealthMoveToElement = async (locator: import("playwright").Locator): Promise<void> => {
         if (browserMode !== "stealth") return;
         try {
-          const center = await getElementCenter(el);
+          const center = await getElementCenter(locator);
           await humanMouseMove(entry.page, center.x, center.y);
-          await new Promise(r => setTimeout(r, 50 + Math.random() * 100));
-        } catch { /* element may not be visible */ }
+          await new Promise<void>((resolve: () => void): void => { setTimeout(resolve, LIMITS.MOUSE_IDLE + Math.random() * LIMITS.MOUSE_JITTER); });
+        } catch { void 0; /* best-effort: element may not be visible */ }
       };
 
       const resolved = await resolveField(entry.page, target);
-      if (!resolved) { res.status(404).json({ error: `Field '${target}' not found` }); return; }
-      await stealthMoveToEl(resolved.locator);
+      if (!resolved) { res.status(HTTP.NOT_FOUND).json({ error: `Field '${target}' not found` }); return; }
+      await stealthMoveToElement(resolved.locator);
       const action = await smartFill(resolved, value);
       filledWith = `${resolved.matchedBy} (${action})`; filled = true;
 
       // Include current form values in response
-      const fillState = await entry.page.evaluate(() => {
+      const fillState = await entry.page.evaluate((limits: any): string => {
         const doc = document;
         const lines: string[] = [];
-        doc.querySelectorAll("form").forEach((form) => {
+        doc.querySelectorAll("form").forEach((form: any): void => {
           const id = form.id || form.getAttribute("name") || "(unnamed)";
           const fields: string[] = [];
-          form.querySelectorAll("input, select, textarea").forEach((el) => {
-            const inp = el as HTMLInputElement;
+          form.querySelectorAll("input, select, textarea").forEach((element: any): void => {
+            const inp = element as HTMLInputElement;
             const name = inp.name || inp.id || inp.placeholder || inp.type;
             if (name && inp.type !== "hidden") {
-              const val = inp.value ? ` ="${inp.value.substring(0, 20)}"` : "";
-              fields.push(`${name}[${inp.type || el.tagName.toLowerCase()}]${val}`);
+              const val = inp.value ? ` ="${inp.value.substring(0, limits.maxValue)}"` : "";
+              fields.push(`${name}[${inp.type || element.tagName.toLowerCase()}]${val}`);
             }
           });
           if (fields.length > 0) lines.push(`Form #${id}: ${fields.join(", ")}`);
         });
         const buttons: string[] = [];
-        doc.querySelectorAll('button, input[type="submit"], [role="button"]').forEach((el) => {
-          const text = (el.textContent || (el as HTMLInputElement).value || "").trim().substring(0, 30);
+        doc.querySelectorAll('button, input[type="submit"], [role="button"]').forEach((element: any): void => {
+          const text = (element.textContent || (element as HTMLInputElement).value || "").trim().substring(0, limits.maxText);
           if (text && !buttons.includes(text)) buttons.push(text);
         });
-        if (buttons.length > 0) lines.push(`Buttons: ${buttons.slice(0, 8).join(", ")}`);
+        if (buttons.length > 0) lines.push(`Buttons: ${buttons.slice(0, limits.maxButtons).join(", ")}`);
         return lines.join("\n");
-      });
+      }, { maxText: LIMITS.MAX_TEXT_LENGTH, maxButtons: LIMITS.MAX_BUTTONS, maxValue: LIMITS.MAX_VALUE_LENGTH });
       res.json({ filled: target, value, selector: filledWith, state: fillState });
     } catch (err) {
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+      res.status(HTTP.SERVER_ERROR).json({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
-  // POST /pages/:name/select - select option by value
-  app.post("/pages/:name/select", async (req: Request<{ name: string }>, res: Response) => {
-    const r = getPageEntry(req, res);
-    if (!r) return;
-    const { entry } = r;
+  // POST /pages/:name/select - select option by value/ARIA ref
+  app.post("/pages/:name/select", async (req: Request<{ name: string }>, res: Response): Promise<void> => {
+    const pageEntry = getPageEntry(req, res);
+    if (!pageEntry) return;
+    const { entry } = pageEntry;
     try {
       const { target, value } = req.body as { target: string; value: string };
-      if (!target || !value) { res.status(400).json({ error: "target and value are required" }); return; }
+      if (!target || !value) { res.status(HTTP.BAD_REQUEST).json({ error: "target and value are required" }); return; }
 
       let selected = false;
       let selectedWith = "";
 
+      // ARIA ref select (e.g., e1, e5)
+      if (/^e\d+$/.test(target)) {
+        const elementHandle = await entry.page.evaluateHandle((refId: string): any => {
+          const globals = globalThis as any;
+          const refs = globals.__devBrowserRefs;
+          if (!refs) throw new Error("No snapshot refs found. Run 'aria' first.");
+          const element = refs[refId];
+          if (!element) throw new Error(`Ref "${refId}" not found. Available: ${Object.keys(refs).join(", ")}`);
+          return element;
+        }, target);
+        const element = elementHandle.asElement();
+        if (!element) {
+          await elementHandle.dispose();
+          res.status(HTTP.NOT_FOUND).json({ error: `Ref '${target}' did not resolve to an element.` });
+          return;
+        }
+        await element.evaluate((node: any, val: string): void => {
+          const byValue: any = Array.from(node.options).find((option: any): boolean => option.value === val);
+          const byText: any = Array.from(node.options).find((option: any): boolean => option.textContent?.trim() === val);
+          const option: any = byValue || byText;
+          if (option) { node.value = option.value; node.dispatchEvent(new Event('change', { bubbles: true })); }
+          else { throw new Error(`Option "${val}" not found in select`); }
+        }, value);
+        await elementHandle.dispose();
+        res.json({ selected: target, value, selector: "ref" });
+        return;
+      }
+
       // Try select-specific CSS selectors first
       if (/^[.#\[]/.test(target)) {
-        try { const el = entry.page.locator(target).first(); if (await el.count() > 0) { await el.selectOption(value); selectedWith = target; selected = true; } } catch {}
+        try { const locator = entry.page.locator(target).first(); if (await locator.count() > 0) { await locator.selectOption(value); selectedWith = target; selected = true; } } catch { void 0; /* selector: try next matching strategy */ }
       }
       if (!selected) {
         for (const sel of [`select[name="${target}"]`, `select#${target}`]) {
-          try { const el = entry.page.locator(sel).first(); if (await el.count() > 0) { await el.selectOption(value); selectedWith = sel; selected = true; break; } } catch {}
+          try { const locator = entry.page.locator(sel).first(); if (await locator.count() > 0) { await locator.selectOption(value); selectedWith = sel; selected = true; break; } } catch { void 0; /* selector: try next matching strategy */ }
         }
       }
       if (!selected) {
         const resolved = await resolveField(entry.page, target);
         if (resolved) { await resolved.locator.selectOption(value); selectedWith = resolved.matchedBy; selected = true; }
       }
-      if (!selected) { res.status(404).json({ error: `Select element '${target}' not found` }); return; }
+      if (!selected) { res.status(HTTP.NOT_FOUND).json({ error: `Select element '${target}' not found` }); return; }
 
       res.json({ selected: target, value, selector: selectedWith });
     } catch (err) {
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+      res.status(HTTP.SERVER_ERROR).json({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
-  // POST /pages/:name/text - get text content of element
-  app.post("/pages/:name/text", async (req: Request<{ name: string }>, res: Response) => {
-    const r = getPageEntry(req, res);
-    if (!r) return;
-    const { entry } = r;
+  // POST /pages/:name/text - get text content of element or ARIA ref
+  app.post("/pages/:name/text", async (req: Request<{ name: string }>, res: Response): Promise<void> => {
+    const pageEntry = getPageEntry(req, res);
+    if (!pageEntry) return;
+    const { entry } = pageEntry;
     try {
       const { target } = req.body as { target: string };
-      if (!target) { res.status(400).json({ error: "target is required" }); return; }
-      const el = entry.page.locator(target).first();
-      if (await el.count() === 0) { res.status(404).json({ error: `Selector '${target}' not found` }); return; }
-      const text = await el.textContent();
+      if (!target) { res.status(HTTP.BAD_REQUEST).json({ error: "target is required" }); return; }
+
+      // ARIA ref text (e.g., e1, e5)
+      if (/^e\d+$/.test(target)) {
+        const text = await entry.page.evaluate((refId: string): string => {
+          const globals = globalThis as any;
+          const refs = globals.__devBrowserRefs;
+          if (!refs) throw new Error("No snapshot refs found. Run 'aria' first.");
+          const element = refs[refId];
+          if (!element) throw new Error(`Ref "${refId}" not found. Available: ${Object.keys(refs).join(", ")}`);
+          return (element.textContent || "").trim();
+        }, target);
+        res.json({ text });
+        return;
+      }
+
+      const locator = entry.page.locator(target).first();
+      if (await locator.count() === 0) { res.status(HTTP.NOT_FOUND).json({ error: `Selector '${target}' not found` }); return; }
+      const text = await locator.textContent();
       res.json({ text: text?.trim() || "" });
     } catch (err) {
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+      res.status(HTTP.SERVER_ERROR).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // POST /pages/:name/keys - send keyboard input (type text or press special keys)
+  app.post("/pages/:name/keys", async (req: Request<{ name: string }>, res: Response): Promise<void> => {
+    const pageEntry = getPageEntry(req, res);
+    if (!pageEntry) return;
+    const { entry } = pageEntry;
+    try {
+      const { keys } = req.body as { keys: string };
+      if (!keys) { res.status(HTTP.BAD_REQUEST).json({ error: "keys is required" }); return; }
+
+      // Special key names that should use press() instead of type()
+      const SPECIAL_KEYS = new Set([
+        "Enter", "Tab", "Escape", "Backspace", "Delete", "Space",
+        "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
+        "Home", "End", "PageUp", "PageDown", "Insert",
+        "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12",
+      ]);
+      const isPress = SPECIAL_KEYS.has(keys) || /^(Control|Alt|Meta|Shift)\+/.test(keys);
+
+      let action: string;
+      if (isPress) {
+        await entry.page.keyboard.press(keys);
+        action = "pressed";
+      } else {
+        await entry.page.keyboard.type(keys);
+        action = "typed";
+      }
+
+      res.json({ success: true, action, keys });
+    } catch (err) {
+      res.status(HTTP.SERVER_ERROR).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // POST /pages/:name/jsclick - dispatch JS click events (mousedown/mouseup/click)
+  // Use when Playwright's click() doesn't trigger JS event handlers
+  app.post("/pages/:name/jsclick", async (req: Request<{ name: string }>, res: Response): Promise<void> => {
+    const pageEntry = getPageEntry(req, res);
+    if (!pageEntry) return;
+    const { entry } = pageEntry;
+    try {
+      const { target } = req.body as { target: string };
+      if (!target) { res.status(HTTP.BAD_REQUEST).json({ error: "target is required" }); return; }
+
+      let clickedType = "";
+      let elementHandle: import("playwright").ElementHandle | null = null;
+
+      // ARIA ref (e.g., e1, e5)
+      if (/^e\d+$/.test(target)) {
+        const handle = await entry.page.evaluateHandle((refId: string): any => {
+          const globals = globalThis as any;
+          const refs = globals.__devBrowserRefs;
+          if (!refs) throw new Error("No snapshot refs found. Run 'aria' first.");
+          const element = refs[refId];
+          if (!element) throw new Error(`Ref "${refId}" not found.`);
+          return element;
+        }, target);
+        elementHandle = handle.asElement();
+        if (!elementHandle) { await handle.dispose(); res.status(HTTP.NOT_FOUND).json({ error: `Ref '${target}' not found` }); return; }
+        clickedType = "ref";
+      }
+
+      // CSS selector
+      if (!elementHandle && /^[#.\[]/.test(target)) {
+        try {
+          const loc = entry.page.locator(target).first();
+          if (await loc.count() > 0) { elementHandle = await loc.elementHandle(); clickedType = "selector"; }
+        } catch { void 0; /* selector: try next matching strategy */ }
+      }
+
+      // Button by text
+      if (!elementHandle) {
+        try {
+          const loc = entry.page.getByRole("button", { name: target });
+          if (await loc.count() > 0) { elementHandle = await loc.first().elementHandle(); clickedType = "button"; }
+        } catch { void 0; /* selector: try next matching strategy */ }
+      }
+
+      // Link by text
+      if (!elementHandle) {
+        try {
+          const loc = entry.page.getByRole("link", { name: target });
+          if (await loc.count() > 0) { elementHandle = await loc.first().elementHandle(); clickedType = "link"; }
+        } catch { void 0; /* selector: try next matching strategy */ }
+      }
+
+      // Text content
+      if (!elementHandle) {
+        try {
+          const loc = entry.page.locator(`text="${target}"`).first();
+          if (await loc.count() > 0) { elementHandle = await loc.elementHandle(); clickedType = "text"; }
+        } catch { void 0; /* selector: try next matching strategy */ }
+      }
+
+      if (!elementHandle) { res.status(HTTP.NOT_FOUND).json({ error: `Element '${target}' not found` }); return; }
+
+      // Dispatch JS click events
+      await elementHandle.evaluate((node: any): void => {
+        node.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+        node.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+        node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+        if (typeof node.click === 'function') node.click();
+      });
+
+      try { await entry.page.waitForLoadState("domcontentloaded", { timeout: TIMEOUTS.SHORT }); } catch { void 0; /* best-effort: proceed if load state times out */ }
+
+      res.json({ jsclicked: target, type: clickedType, url: entry.page.url() });
+    } catch (err) {
+      res.status(HTTP.SERVER_ERROR).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // POST /pages/:name/wait - wait for selector or text to appear
+  app.post("/pages/:name/wait", async (req: Request<{ name: string }>, res: Response): Promise<void> => {
+    const pageEntry = getPageEntry(req, res);
+    if (!pageEntry) return;
+    const { entry } = pageEntry;
+    try {
+      const { target, timeout = TIMEOUTS.LONG } = req.body as { target: string; timeout?: number };
+      if (!target) { res.status(HTTP.BAD_REQUEST).json({ error: "target is required" }); return; }
+
+      let found = "";
+      const looksLikeSelector = /^[#.\[]/.test(target) || /^[a-z][a-z0-9-]*$/i.test(target);
+
+      if (looksLikeSelector) {
+        // Try as CSS selector first
+        try {
+          await entry.page.locator(target).first().waitFor({ timeout });
+          found = `selector: ${target}`;
+        } catch { void 0; /* selector: fall through to text matching */ }
+      }
+
+      if (!found) {
+        // Try as text
+        try {
+          await entry.page.getByText(target).first().waitFor({ timeout });
+          found = `text: ${target}`;
+        } catch { void 0; /* selector: target not found within timeout */
+          res.status(HTTP.TIMEOUT).json({ error: `'${target}' not found within ${timeout}ms` });
+          return;
+        }
+      }
+
+      res.json({ success: true, found, url: entry.page.url() });
+    } catch (err) {
+      res.status(HTTP.SERVER_ERROR).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // POST /pages/:name/upload - upload file to a file input element
+  app.post("/pages/:name/upload", async (req: Request<{ name: string }>, res: Response): Promise<void> => {
+    const pageEntry = getPageEntry(req, res);
+    if (!pageEntry) return;
+    const { entry } = pageEntry;
+    try {
+      const { target, filepath } = req.body as { target: string; filepath: string };
+      if (!target) { res.status(HTTP.BAD_REQUEST).json({ error: "target is required" }); return; }
+      if (!filepath) { res.status(HTTP.BAD_REQUEST).json({ error: "filepath is required" }); return; }
+
+      const fs = await import("fs");
+      if (!fs.existsSync(filepath)) { res.status(HTTP.BAD_REQUEST).json({ error: `File not found: ${filepath}` }); return; }
+
+      const isRef = /^e\d+$/.test(target);
+      const looksLikeSelector = /^[a-z]+\[|^\[|^#|^\./.test(target);
+
+      // ARIA ref
+      if (isRef) {
+        const handle = await entry.page.evaluateHandle((refId: string): any => {
+          const globals = globalThis as any;
+          const refs = globals.__devBrowserRefs;
+          if (!refs) throw new Error("No snapshot refs found. Run 'aria' first.");
+          const element = refs[refId];
+          if (!element) throw new Error(`Ref "${refId}" not found.`);
+          return element;
+        }, target);
+        const element = handle.asElement();
+        if (!element) { await handle.dispose(); res.status(HTTP.NOT_FOUND).json({ error: `Ref '${target}' not found or not a file input` }); return; }
+        await element.setInputFiles(filepath);
+        res.json({ uploaded: filepath, target, type: "ref" });
+        return;
+      }
+
+      // CSS selector
+      if (looksLikeSelector) {
+        const locator = entry.page.locator(target).first();
+        if (await locator.count() > 0) {
+          await locator.setInputFiles(filepath);
+          res.json({ uploaded: filepath, target, type: "selector" });
+          return;
+        }
+      }
+
+      // By name or id attribute
+      const selectors = [
+        `input[type="file"][name="${target}"]`,
+        `input[type="file"]#${target}`,
+      ];
+      // Generic fallback for "file" or "upload" target
+      if (/^(file|upload)$/i.test(target)) {
+        selectors.push('input[type="file"]');
+      }
+      for (const sel of selectors) {
+        const locator = entry.page.locator(sel).first();
+        if (await locator.count() > 0) {
+          await locator.setInputFiles(filepath);
+          res.json({ uploaded: filepath, target, selector: sel, type: "name" });
+          return;
+        }
+      }
+
+      // Search iframes
+      const frames = entry.page.frames();
+      for (const frame of frames) {
+        if (frame === entry.page.mainFrame()) continue;
+        try {
+          const sel = looksLikeSelector ? target : `input[type="file"][name="${target}"]`;
+          const locator = frame.locator(sel).first();
+          if (await locator.count() > 0) {
+            await locator.setInputFiles(filepath);
+            res.json({ uploaded: filepath, target, selector: sel, type: "iframe" });
+            return;
+          }
+          const generic = frame.locator('input[type="file"]').first();
+          if (await generic.count() > 0) {
+            await generic.setInputFiles(filepath);
+            res.json({ uploaded: filepath, target: 'input[type="file"]', type: "iframe" });
+            return;
+          }
+        } catch { void 0; /* selector: iframe may be detached */ }
+      }
+
+      res.status(HTTP.NOT_FOUND).json({ error: `File input '${target}' not found (checked page and iframes)` });
+    } catch (err) {
+      res.status(HTTP.SERVER_ERROR).json({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
   // Start the server
-  const server = app.listen(port, () => {
+  const server = app.listen(port, (): void => {
     console.log(`HTTP API server running on port ${port}`);
   });
 
   // Track active connections for clean shutdown
   const connections = new Set<Socket>();
-  server.on("connection", (socket: Socket) => {
+  server.on("connection", (socket: Socket): void => {
     connections.add(socket);
-    socket.on("close", () => connections.delete(socket));
+    socket.on("close", (): void => { connections.delete(socket); });
   });
 
   // Track if cleanup has been called to avoid double cleanup
   let cleaningUp = false;
 
   // Cleanup function
-  const cleanup = async () => {
+  const cleanup = async (): Promise<void> => {
     if (cleaningUp) return;
     cleaningUp = true;
 
@@ -972,9 +1438,7 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     for (const entry of registry.values()) {
       try {
         await entry.page.close();
-      } catch {
-        // Page might already be closed
-      }
+      } catch { void 0; /* cleanup: page might already be closed */ }
     }
     registry.clear();
 
@@ -982,17 +1446,13 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     if (browserMode !== "user") {
       try {
         await context.close();
-      } catch {
-        // Context might already be closed
-      }
+      } catch { void 0; /* cleanup: context might already be closed */ }
     } else {
       // In user mode, just disconnect from browser (don't close it)
       if (browser) {
         try {
           await browser.close();
-        } catch {
-          // Browser connection might already be closed
-        }
+        } catch { void 0; /* cleanup: browser connection might already be closed */ }
       }
     }
 
@@ -1001,24 +1461,22 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
   };
 
   // Synchronous cleanup for forced exits
-  const syncCleanup = () => {
+  const syncCleanup = (): void => {
     try {
       context.close();
-    } catch {
-      // Best effort
-    }
+    } catch { void 0; /* cleanup: best effort on forced exit */ }
   };
 
   // Signal handlers (consolidated to reduce duplication)
   const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 
-  const signalHandler = async () => {
+  const signalHandler = async (): Promise<void> => {
     await cleanup();
     process.exit(0);
   };
 
   // Error handler - log but DON'T exit for recoverable errors
-  const errorHandler = (err: unknown, type: string) => {
+  const errorHandler = (err: unknown, type: string): void => {
     const timestamp = new Date().toISOString();
     const errMsg = err instanceof Error ? err.stack || err.message : String(err);
     console.error(`[${timestamp}] ${type}: ${errMsg}`);
@@ -1032,28 +1490,28 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
       "heap out of memory",
     ];
 
-    const isFatal = fatalPatterns.some((p) => errStr.includes(p));
+    const isFatal = fatalPatterns.some((pattern: string): boolean => errStr.includes(pattern));
     if (isFatal) {
       console.error(`[${timestamp}] FATAL ERROR - server will exit`);
-      cleanup().finally(() => process.exit(1));
+      cleanup().finally((): never => process.exit(1));
     } else {
       console.error(`[${timestamp}] Recoverable error - server continues`);
     }
   };
 
   // Wrapped error handlers for removal
-  const uncaughtHandler = (err: unknown) => errorHandler(err, "uncaughtException");
-  const rejectionHandler = (err: unknown) => errorHandler(err, "unhandledRejection");
+  const uncaughtHandler = (err: unknown): void => { errorHandler(err, "uncaughtException"); };
+  const rejectionHandler = (err: unknown): void => { errorHandler(err, "unhandledRejection"); };
 
   // Register handlers (once each)
-  signals.forEach((sig) => process.on(sig, signalHandler));
+  signals.forEach((signal: typeof signals[number]): void => { process.on(signal, signalHandler); });
   process.on("uncaughtException", uncaughtHandler);
   process.on("unhandledRejection", rejectionHandler);
   process.on("exit", syncCleanup);
 
   // Helper to remove all handlers
-  const removeHandlers = () => {
-    signals.forEach((sig) => process.off(sig, signalHandler));
+  const removeHandlers = (): void => {
+    signals.forEach((signal: typeof signals[number]): void => { process.off(signal, signalHandler); });
     process.off("uncaughtException", uncaughtHandler);
     process.off("unhandledRejection", rejectionHandler);
     process.off("exit", syncCleanup);
@@ -1062,7 +1520,7 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
   return {
     wsEndpoint,
     port,
-    async stop() {
+    async stop(): Promise<void> {
       removeHandlers();
       await cleanup();
     },

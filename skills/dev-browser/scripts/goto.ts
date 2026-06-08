@@ -23,66 +23,82 @@ try {
     // Page loaded but network still active - proceed anyway
 }
 
-// Gather page info including forms/inputs
-const info = await page.evaluate(() => {
-    const forms = Array.from(document.querySelectorAll('form')).map(f => ({
-        id: f.id || null,
-        action: f.action || null,
-        fields: Array.from(f.querySelectorAll('input, select, textarea')).slice(0, 15).map(el => ({
-            tag: el.tagName.toLowerCase(),
-            type: (el as HTMLInputElement).type || null,
-            name: el.getAttribute('name') || el.id || null,
-            id: el.id || null,
-            placeholder: (el as HTMLInputElement).placeholder || null
-        })).filter(f => f.type !== 'hidden')
-    }));
+// Compact page state output
+const state = await page.evaluate(() => {
+  const doc = document;
+  const lines: string[] = [];
 
-    // Inputs outside forms
-    const orphanInputs = Array.from(document.querySelectorAll('input:not(form input), select:not(form select), textarea:not(form textarea)')).slice(0, 10).map(el => ({
-        tag: el.tagName.toLowerCase(),
-        type: (el as HTMLInputElement).type || null,
-        name: el.getAttribute('name') || el.id || null,
-        id: el.id || null
-    })).filter(f => (f as any).type !== 'hidden');
+  // Forms summary - compact format
+  const forms = doc.querySelectorAll("form");
+  forms.forEach((form) => {
+    const id = form.id || form.getAttribute("name") || "(unnamed)";
+    const fields: string[] = [];
+    form.querySelectorAll("input, select, textarea").forEach((el) => {
+      const inp = el as HTMLInputElement;
+      const name = inp.name || inp.id || inp.placeholder || inp.type;
+      if (name && inp.type !== "hidden") {
+        fields.push(`${name}[${inp.type || el.tagName.toLowerCase()}]`);
+      }
+    });
+    if (fields.length > 0) {
+      lines.push(`Form #${id}: ${fields.join(", ")}`);
+    }
+  });
 
-    // Key buttons
-    const buttons = Array.from(document.querySelectorAll('button, input[type="submit"], input[type="button"]')).slice(0, 8).map(el => ({
-        text: el.textContent?.trim().substring(0, 40) || (el as HTMLInputElement).value || null,
-        id: el.id || null,
-        type: (el as HTMLInputElement).type || 'button'
-    }));
+  // Standalone inputs (not in forms)
+  const standaloneInputs: string[] = [];
+  doc.querySelectorAll("input:not(form input), select:not(form select), textarea:not(form textarea)").forEach((el) => {
+    const inp = el as HTMLInputElement;
+    const name = inp.name || inp.id || inp.placeholder || inp.type;
+    if (name && inp.type !== "hidden") {
+      standaloneInputs.push(`${name}[${inp.type || el.tagName.toLowerCase()}]`);
+    }
+  });
+  if (standaloneInputs.length > 0) {
+    lines.push(`Inputs: ${standaloneInputs.slice(0, 10).join(", ")}`);
+  }
 
-    // Iframes (useful for Stripe, reCAPTCHA, etc.)
-    const iframes = Array.from(document.querySelectorAll('iframe')).slice(0, 5).map(f => ({
-        name: f.name || null,
-        id: f.id || null,
-        src: f.src?.substring(0, 100) || null
-    }));
+  // Visible buttons
+  const buttons: string[] = [];
+  doc.querySelectorAll('button, input[type="submit"], [role="button"]').forEach((el) => {
+    const text = (el.textContent || (el as HTMLInputElement).value || "").trim().substring(0, 30);
+    if (text && !buttons.includes(text)) buttons.push(text);
+  });
+  if (buttons.length > 0) {
+    lines.push(`Buttons: ${buttons.slice(0, 8).join(", ")}`);
+  }
 
-    // Links - filter out noise (anchors, javascript, empty)
-    const seen = new Set<string>();
-    const links = Array.from(document.querySelectorAll('a[href]'))
-        .map(a => ({ href: a.getAttribute('href') || '', text: a.textContent?.trim().substring(0, 50) || '' }))
-        .filter(l => {
-            if (!l.href || l.href === '#' || l.href.startsWith('javascript:') || l.href.startsWith('mailto:')) return false;
-            if (seen.has(l.href)) return false;
-            seen.add(l.href);
-            return true;
-        })
-        .slice(0, 15)
-        .map(l => ({ text: l.text || null, href: l.href }));
+  // Iframes
+  const iframes = doc.querySelectorAll("iframe");
+  if (iframes.length > 0) {
+    const iframeInfo = Array.from(iframes).slice(0, 5).map(f => {
+      const name = f.name || f.id || "";
+      const src = f.src?.substring(0, 60) || "";
+      return name ? `${name}(${src})` : src;
+    }).filter(Boolean);
+    if (iframeInfo.length > 0) lines.push(`Iframes: ${iframeInfo.join(", ")}`);
+  }
 
-    return { forms, orphanInputs, buttons, iframes, links };
+  // Key links (nav, main content, or first 15 unique)
+  const links: string[] = [];
+  const seen = new Set<string>();
+  doc.querySelectorAll("a[href]").forEach((el) => {
+    const text = (el.textContent || "").trim().substring(0, 30);
+    const href = el.getAttribute("href") || "";
+    if (text && !seen.has(text) && href !== "#" && !href.startsWith("javascript:") && !href.startsWith("mailto:")) {
+      seen.add(text);
+      links.push(text);
+    }
+  });
+  if (links.length > 0) {
+    lines.push(`Links: ${links.slice(0, 15).join(", ")}`);
+  }
+
+  return lines.join("\n");
 });
 
-console.log(JSON.stringify({
-    url: page.url(),
-    title: await page.title(),
-    forms: info.forms.length > 0 ? info.forms : undefined,
-    inputs: info.orphanInputs.length > 0 ? info.orphanInputs : undefined,
-    buttons: info.buttons.length > 0 ? info.buttons : undefined,
-    iframes: info.iframes.length > 0 ? info.iframes : undefined,
-    links: info.links.length > 0 ? info.links : undefined
-}, null, 2));
+console.log(`URL: ${page.url()}`);
+console.log(`Title: ${await page.title()}`);
+if (state) console.log(state);
 
 await client.disconnect();

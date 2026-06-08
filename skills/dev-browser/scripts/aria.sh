@@ -5,7 +5,7 @@ PAGE="${PAGE_NAME:-main}"
 PAGE_ID="${PREFIX}-${PAGE}"
 PORT="${SERVER_PORT}"
 
-result=$(curl -s -m 35 -X POST "http://localhost:${PORT}/pages/${PAGE_ID}/aria" -H 'Content-Type: application/json' -d '{}')
+result=$(curl -s -m 15 -X POST "http://localhost:${PORT}/pages/${PAGE_ID}/aria" -H 'Content-Type: application/json' -d '{}')
 
 error=$(echo "$result" | jq -r '.error // empty' 2>/dev/null)
 if [[ -n "$error" ]]; then

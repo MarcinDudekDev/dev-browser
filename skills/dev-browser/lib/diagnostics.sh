@@ -7,16 +7,17 @@ cmd_debug() {
 }
 
 cmd_crashes() {
-    echo "=== CRASH LOG ==="
-    if [[ -f "$SKILL_TMP_DIR/crash.log" ]]; then
-        tail -100 "$SKILL_TMP_DIR/crash.log"
+    local mode="${BROWSER_MODE:-$(get_current_mode)}"
+    echo "=== CRASH LOG (mode: $mode) ==="
+    if [[ -f "$SKILL_TMP_DIR/crash-${mode}.log" ]]; then
+        tail -100 "$SKILL_TMP_DIR/crash-${mode}.log"
     else
         echo "(no crashes recorded)"
     fi
     echo ""
     echo "=== LAST SESSION INFO ==="
-    if [[ -f "$SKILL_TMP_DIR/sessions.json" ]]; then
-        cat "$SKILL_TMP_DIR/sessions.json"
+    if [[ -f "$SKILL_TMP_DIR/sessions-${mode}.json" ]]; then
+        cat "$SKILL_TMP_DIR/sessions-${mode}.json"
     else
         echo "(no session info)"
     fi
@@ -35,7 +36,7 @@ cmd_tabs() {
     [[ -z "$_http" ]] && _http="$SERVER_PORT"
 
     echo "=== CHROME TABS (via CDP port $_cdp) ==="
-    curl -s "http://localhost:$_cdp/json/list" 2>/dev/null | python3 -c "
+    curl -s -m 10 "http://localhost:$_cdp/json/list" 2>/dev/null | python3 -c "
 import sys, json
 try:
     tabs = json.load(sys.stdin)
@@ -60,7 +61,7 @@ if blank:
 "
     echo ""
     echo "=== REGISTERED PAGES ==="
-    curl -s "http://localhost:$_http/pages" 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); pages=d.get('pages',[]); print(f'{len(pages)} registered'); [print(f'  - {p}') for p in pages]" 2>/dev/null || echo "(server not running)"
+    curl -s -m 10 "http://localhost:$_http/pages" 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); pages=d.get('pages',[]); print(f'{len(pages)} registered'); [print(f'  - {p}') for p in pages]" 2>/dev/null || echo "(server not running)"
 }
 
 cmd_cleanup() {
@@ -82,9 +83,9 @@ cmd_cleanup() {
 
     # Get registered pages from server
     local registry_json
-    registry_json=$(curl -s "http://localhost:$SERVER_PORT/pages" 2>/dev/null)
+    registry_json=$(curl -s -m 10 "http://localhost:$SERVER_PORT/pages" 2>/dev/null)
 
-    curl -s "http://localhost:$CDP_PORT/json/list" 2>/dev/null | python3 -c "
+    curl -s -m 10 "http://localhost:$CDP_PORT/json/list" 2>/dev/null | python3 -c "
 import sys, json, urllib.request
 
 mode = '$mode'

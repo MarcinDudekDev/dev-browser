@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Dev Browser Test Page</title>
+</head>
+<body>
+  <h1>Test Page</h1>
+  <p id="intro">This is a test page for dev-browser integration tests.</p>
+
+  <nav>
+    <a href="#section1">Section 1</a>
+    <a href="#section2">Section 2</a>
+  </nav>
+
+  <form id="test-form" onsubmit="event.preventDefault(); document.getElementById('result').textContent = 'Form submitted!'">
+    <label for="username">Username</label>
+    <input type="text" id="username" name="username" placeholder="Enter username">
+
+    <label for="email">Email</label>
+    <input type="email" id="email" name="email" placeholder="Enter email">
+
+    <label for="password">Password</label>
+    <input type="password" id="password" name="password">
+
+    <label for="bio">Bio</label>
+    <textarea id="bio" name="bio"></textarea>
+
+    <label>
+      <input type="checkbox" id="agree" name="agree"> I agree
+    </label>
+
+    <label><input type="radio" name="plan" value="free"> Free</label>
+    <label><input type="radio" name="plan" value="pro"> Pro</label>
+
+    <label for="country">Country</label>
+    <select id="country" name="country">
+      <option value="">Select...</option>
+      <option value="us">United States</option>
+      <option value="uk">United Kingdom</option>
+      <option value="pl">Poland</option>
+    </select>
+
+    <button type="submit">Submit Form</button>
+  </form>
+
+  <section id="actions">
+    <button id="action-btn">Click Me</button>
+    <button id="counter-btn">Count</button>
+    <div role="button" id="role-btn" tabindex="0">Role Button</div>
+  </section>
+
+  <div id="result"></div>
+
+  <iframe id="nested-frame" name="nested" srcdoc="<html><body><p>Iframe content here</p></body></html>"></iframe>
+
+  <script>
+    document.getElementById('action-btn').addEventListener('click', function() {
+      document.getElementById('result').textContent = 'Button clicked!';
+    });
+    document.getElementById('counter-btn').addEventListener('click', function() {
+      var count = parseInt(this.dataset.count || '0') + 1;
+      this.dataset.count = count;
+      document.getElementById('result').textContent = 'Count: ' + count;
+    });
+    document.getElementById('role-btn').addEventListener('click', function() {
+      document.getElementById('result').textContent = 'Role button clicked!';
+    });
+  </script>
+</body>
+</html>

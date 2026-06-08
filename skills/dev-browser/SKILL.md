@@ -73,7 +73,7 @@ dev-browser.sh --element <ref|selector> [page]         # Full element inspection
 
 | Mode | Flag | Port | Use Case |
 |------|------|------|----------|
-| dev | `--dev` (default) | 9222 | Normal testing |
+| dev | `--dev` (default) | 9220 | Normal testing |
 | stealth | `--stealth` | 9224 | Anti-fingerprint (bypasses bot detection) |
 | user | `--user` | 9226 | Your real browser session |
 

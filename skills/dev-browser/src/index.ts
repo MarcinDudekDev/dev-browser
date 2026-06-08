@@ -1,6 +1,6 @@
 import express, { type Express, type Request, type Response } from "express";
 import { chromium, type BrowserContext, type Page } from "playwright";
-import { mkdirSync, existsSync, readFileSync, writeFileSync } from "fs";
+import { mkdirSync, existsSync, readFileSync, writeFileSync, rmSync } from "fs";
 import { join } from "path";
 import type { Socket } from "net";
 import type {
@@ -220,19 +220,30 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
   let browser: Awaited<ReturnType<typeof chromium.connectOverCDP>> | null = null;
 
   // Reusable launcher for dev/stealth modes — called on startup and after browser crash
+  // Never fall back to process.cwd() — that scatters .browser-data (and stale
+  // Singleton locks) into whatever project dir the server was launched from.
+  // Default to the canonical DEV_BROWSER_HOME/profiles/<mode> instead.
   const userDataDir = (browserMode !== "user")
-    ? (profileDir ? join(profileDir, "browser-data") : join(process.cwd(), ".browser-data"))
+    ? (profileDir
+        ? join(profileDir, "browser-data")
+        : join(process.env.DEV_BROWSER_HOME || join(process.env.HOME || "/tmp", ".dev-browser"), "profiles", browserMode, "browser-data"))
     : "";
 
   async function launchBrowserContext(): Promise<void> {
     if (browserMode !== "user") {
       mkdirSync(userDataDir, { recursive: true });
       fixChromePreferences(userDataDir);
+      // Clear stale Singleton locks left by a crashed Chromium — otherwise
+      // launchPersistentContext fails/hangs with "profile appears to be in use".
+      for (const lock of ["SingletonLock", "SingletonCookie", "SingletonSocket"]) {
+        try { rmSync(join(userDataDir, lock), { force: true }); } catch { void 0; }
+      }
       console.log("Launching browser with persistent context...");
       context = await chromium.launchPersistentContext(userDataDir, {
         headless,
         args: [
           `--remote-debugging-port=${cdpPort}`,
+          "--use-mock-keychain", // silence macOS keychain noise (userCanceledErr -128)
           "--restore-last-session",
           "--disable-session-crashed-bubble",
           ...(browserMode === "stealth" ? [
@@ -264,6 +275,10 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
         await new Promise<void>((resolve: () => void): void => { setTimeout(resolve, TIMEOUTS.STALE_PROCESS_KILL); });
       } catch { void 0; /* cleanup: no stale processes to kill */ }
       await launchBrowserContext();
+      // Verify the relaunched browser is actually functional before declaring
+      // success — never advertise "ready" with a dead/zero-process context.
+      // context.pages() throws if Chromium died immediately after launch.
+      await context.pages();
       console.log("Browser relaunched successfully");
     }
   }

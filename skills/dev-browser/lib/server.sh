@@ -131,8 +131,13 @@ _record_restart() {
 }
 
 start_server() {
-    # Determine mode and set variables
-    local mode="${BROWSER_MODE:-dev}"
+    # Determine mode from the single source of truth: env BROWSER_MODE > persisted
+    # browser_mode file > dev. Pin BROWSER_MODE so every restart-lock/cooldown
+    # helper below (_restart_lock_dir, _is_restart_allowed, _record_restart) and
+    # any nested stop_server resolve the SAME mode — prevents the dev/stealth
+    # split where start defaulted to dev/9222 while stop targeted the file's mode.
+    BROWSER_MODE="$(get_current_mode)"
+    local mode="$BROWSER_MODE"
     set_mode_vars "$mode"
 
     log_debug "start_server called for mode=$mode (port=$SERVER_PORT)"
@@ -176,12 +181,22 @@ start_server() {
         return 0
     fi
 
-    # Port responds but health fails = zombie state (browser crashed but Express alive)
+    # Port responds but /health != "ok". Distinguish OUR zombie (Express alive,
+    # browser dead → /health == "browser-dead") from a FOREIGN process holding
+    # the port (e.g. the user's real browser on 9222 → /health empty/404).
     if curl -s --connect-timeout 2 "http://localhost:$SERVER_PORT" &>/dev/null; then
-        log_debug "Port responds but health check failed - zombie state, restarting"
-        echo "Server in bad state (browser likely crashed), restarting..." >&2
-        stop_server
-        sleep 1
+        if is_our_server; then
+            log_debug "Port responds, /health not ok - our zombie, restarting"
+            echo "Server in bad state (browser likely crashed), restarting..." >&2
+            stop_server
+            sleep 1
+        else
+            # Foreign holder — NEVER kill it (could be the user's real browser).
+            log_debug "Port $SERVER_PORT held by FOREIGN process (not our /health) - aborting without kill"
+            print_server_error "Port $SERVER_PORT is held by another process (likely your real browser). Use --stealth, or free the port / pick another mode."
+            _release_restart_lock
+            return 1
+        fi
     fi
 
     # Kill any orphaned Chrome holding the CDP port (handles dead server + live browser)
@@ -232,8 +247,11 @@ start_server() {
 }
 
 stop_server() {
-    # Stop server for current mode (or all if --all passed)
-    local mode="${BROWSER_MODE:-$(get_current_mode)}"
+    # Stop server for current mode (or all if --all passed). Resolve via the same
+    # single source of truth as start_server and pin BROWSER_MODE so the lock/
+    # timestamp helpers below act on this exact mode (no cross-mode kills).
+    local mode="$(get_current_mode)"
+    BROWSER_MODE="$mode"
 
     # Clear restart cooldown so --stop && --server works as force-restart
     rm -f "$SKILL_TMP_DIR/restart-${mode}.timestamp"

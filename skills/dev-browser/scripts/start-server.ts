@@ -121,8 +121,8 @@ try {
 }
 
 // Get port config early for startup checks
-const startupHttpPort = parseInt(process.env.HTTP_PORT || "9222", 10);
-const startupCdpPort = parseInt(process.env.CDP_PORT || "9223", 10);
+const startupHttpPort = parseInt(process.env.HTTP_PORT || "9220", 10);
+const startupCdpPort = parseInt(process.env.CDP_PORT || "9221", 10);
 
 // Check if server is already running on this mode's port
 console.log(`Checking for existing server on port ${startupHttpPort}...`);
@@ -173,8 +173,8 @@ if (previousSession?.crashedAt) {
 console.log("Starting dev browser server...");
 const headless = process.env.HEADLESS === "true";
 const browserMode = (process.env.BROWSER_MODE || "dev") as "dev" | "stealth" | "user";
-const httpPort = parseInt(process.env.HTTP_PORT || "9222", 10);
-const cdpPort = parseInt(process.env.CDP_PORT || "9223", 10);
+const httpPort = parseInt(process.env.HTTP_PORT || "9220", 10);
+const cdpPort = parseInt(process.env.CDP_PORT || "9221", 10);
 console.log(`Browser mode: ${browserMode} (HTTP: ${httpPort}, CDP: ${cdpPort})`);
 let server: Awaited<ReturnType<typeof serve>>;
 

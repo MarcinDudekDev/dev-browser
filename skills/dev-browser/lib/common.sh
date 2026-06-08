@@ -23,16 +23,16 @@ audit_rotate() {
 
 # Multi-server port configuration (each mode gets its own server)
 # Format: HTTP_PORT / CDP_PORT
-#   dev:     9222 / 9223
+#   dev:     9220 / 9221  (moved off 9222 so it can't clash with a real browser)
 #   stealth: 9224 / 9225
 #   user:    9226 / (user's Chrome CDP, typically 9222)
 get_mode_ports() {
     local mode="${1:-dev}"
     case "$mode" in
-        dev)     echo "9222 9223" ;;
+        dev)     echo "9220 9221" ;;
         stealth) echo "9224 9225" ;;
         user)    echo "9226 9222" ;;  # HTTP 9226, connects to user's Chrome on 9222
-        *)       echo "9222 9223" ;;  # default to dev
+        *)       echo "9220 9221" ;;  # default to dev
     esac
 }
 
@@ -91,6 +91,15 @@ check_server_health() {
     local response
     response=$(curl -s --connect-timeout 1 -m 2 "http://localhost:$SERVER_PORT/health" 2>/dev/null)
     [[ "$response" == "ok" ]]
+}
+
+# Is the responder on SERVER_PORT one of OUR dev-browser servers (vs a foreign
+# process such as the user's real browser)? Our /health returns "ok" (healthy)
+# or "browser-dead" (zombie); a foreign CDP/HTTP server returns neither.
+is_our_server() {
+    local r
+    r=$(curl -s --connect-timeout 1 -m 2 "http://localhost:$SERVER_PORT/health" 2>/dev/null)
+    [[ "$r" == "ok" || "$r" == "browser-dead" ]]
 }
 
 # Ensure server is healthy, auto-restart once if dead. Exit 1 on failure.

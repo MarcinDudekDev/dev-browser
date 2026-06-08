@@ -32,8 +32,8 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 echo "Starting dev-browser server..."
 export HEADLESS=$HEADLESS
 export BROWSER_MODE=${BROWSER_MODE:-dev}
-export HTTP_PORT=${HTTP_PORT:-9222}
-export CDP_PORT=${CDP_PORT:-9223}
+export HTTP_PORT=${HTTP_PORT:-9220}
+export CDP_PORT=${CDP_PORT:-9221}
 echo "Browser mode: $BROWSER_MODE (HTTP: $HTTP_PORT, CDP: $CDP_PORT)"
 
 # Server must use tsx (not bun) — bun has Playwright CDP/WebSocket issues

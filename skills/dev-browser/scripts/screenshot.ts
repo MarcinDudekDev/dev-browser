@@ -7,7 +7,7 @@ import { mkdirSync } from "fs";
 const args = process.env.SCRIPT_ARGS || "";
 const pageName = process.env.PAGE_NAME || "main";
 const prefix = process.env.PROJECT_PREFIX || "dev";
-const serverPort = process.env.SERVER_PORT || "9222";
+const serverPort = process.env.SERVER_PORT || "9220";
 const scrollTo = process.env.SCROLL_TO || "";
 const selectorTarget = process.env.SELECTOR_TARGET || "";
 

@@ -13,6 +13,7 @@ import type {
 import { humanMouseMove, getElementCenter, startIdleMovement, stopIdleMovement } from "./mouse-human";
 import { resolveField, smartFill } from "./resolve-field.js";
 import { getSnapshotScript } from "./snapshot/browser-script";
+import { CDPConnection, makeUserContext } from "./cdp-page.js";
 
 export type { ServeOptions, GetPageResponse, ListPagesResponse, ServerInfoResponse };
 
@@ -218,6 +219,7 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
   let context: BrowserContext;
   let wsEndpoint: string;
   let browser: Awaited<ReturnType<typeof chromium.connectOverCDP>> | null = null;
+  let userConn: CDPConnection | null = null;
 
   // Reusable launcher for dev/stealth modes — called on startup and after browser crash
   // Never fall back to process.cwd() — that scatters .browser-data (and stale
@@ -284,6 +286,23 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
   }
 
   if (browserMode === "user") {
+    // HARD SAFETY GATE: --user attaches to the user's REAL Brave on :9222. After
+    // repeated accidental tab/window loss, attaching to the primary browser is OFF
+    // by default and requires an EXPLICIT opt-in (--allow-primary / env). This is
+    // the single chokepoint for every attach path (wrapper OR direct tsx).
+    if (process.env.DEV_BROWSER_ALLOW_PRIMARY !== "1") {
+      console.error("\n=== USER MODE BLOCKED (safety) ===");
+      console.error("--user drives your REAL Brave on port 9222. To prevent accidental");
+      console.error("tab loss it is now OFF unless you explicitly ask for it:");
+      console.error("");
+      console.error("    dev-browser.sh --user --allow-primary --server");
+      console.error("    (or set DEV_BROWSER_ALLOW_PRIMARY=1)");
+      console.error("");
+      console.error("Even when enabled, dev-browser only ever closes tabs IT created.");
+      console.error("==================================\n");
+      throw new Error("user mode is disabled by default — pass --allow-primary (DEV_BROWSER_ALLOW_PRIMARY=1) to opt in");
+    }
+
     // USER MODE: Connect to user's existing Chrome browser
     console.log(`Connecting to user's Chrome on CDP port ${userCdpPort}...`);
     console.log("(Make sure Chrome is running with: --remote-debugging-port=9222)");
@@ -293,13 +312,12 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
       const cdpInfo = (await cdpResponse.json()) as { webSocketDebuggerUrl: string };
       wsEndpoint = cdpInfo.webSocketDebuggerUrl;
 
-      browser = await chromium.connectOverCDP(wsEndpoint);
-      const contexts = browser.contexts();
-      if (contexts.length === 0) {
-        throw new Error("No browser context found. Is Chrome running?");
-      }
-      context = contexts[0];
-      console.log(`Connected to user's Chrome (${contexts.length} context(s))`);
+      // Raw CDP single-target driver — NOT Playwright's connectOverCDP, which
+      // force-attaches to every target in the user's heavy live profile and
+      // hangs forever (see cdp-page.ts header). We attach only to tabs we create.
+      userConn = await CDPConnection.connect(wsEndpoint);
+      context = makeUserContext(userConn) as unknown as BrowserContext;
+      console.log("Connected to user's browser via raw CDP (single-target mode — your existing tabs are untouched)");
     } catch (err) {
       console.error("\n=== USER MODE SETUP REQUIRED ===");
       console.error("To use --user mode, start your browser with remote debugging:");
@@ -361,6 +379,8 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
 
   // Helper to get CDP targetId for a page (with timeout to prevent hangs)
   async function getTargetId(page: Page): Promise<string> {
+    // User mode: CDPPage already knows its targetId (it created the tab).
+    if (browserMode === "user") return (page as unknown as { targetId: string }).targetId;
     return withTimeout((async (): Promise<string> => {
       const cdpSession = await context.newCDPSession(page);
       try {
@@ -1463,11 +1483,11 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
         await context.close();
       } catch { void 0; /* cleanup: context might already be closed */ }
     } else {
-      // In user mode, just disconnect from browser (don't close it)
-      if (browser) {
+      // In user mode, just disconnect our CDP client (NEVER close the user's browser)
+      if (userConn) {
         try {
-          await browser.close();
-        } catch { void 0; /* cleanup: browser connection might already be closed */ }
+          userConn.close();
+        } catch { void 0; /* cleanup: CDP connection might already be closed */ }
       }
     }
 

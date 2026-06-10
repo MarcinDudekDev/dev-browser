@@ -138,22 +138,27 @@ try {
   // Server not running, continue to start
 }
 
-// Clean up stale CDP port if HTTP server isn't running (crash recovery)
-// Use netstat (fast) instead of lsof (hangs on macOS)
-try {
-  const listening = execSync(
-    `netstat -anp tcp 2>/dev/null | grep '\\.${startupCdpPort} ' | grep LISTEN`,
-    { encoding: "utf-8", timeout: 3000 }
-  ).trim();
-  if (listening) {
-    console.log(`Stale process detected on CDP port ${startupCdpPort}, attempting cleanup...`);
-    // Try to kill via fuser (available on most systems) as lsof hangs on macOS
-    try {
-      execSync(`kill -9 $(fuser ${startupCdpPort}/tcp 2>/dev/null) 2>/dev/null`, { timeout: 3000 });
-    } catch { /* best effort */ }
+// Clean up stale CDP port if HTTP server isn't running (crash recovery).
+// NEVER do this in user mode: CDP_PORT there is the user's REAL browser port
+// (9222), and killing it would close all their tabs. Only own dev/stealth
+// Chromium instances are ours to reclaim.
+if ((process.env.BROWSER_MODE || "dev") !== "user") {
+  // Use netstat (fast) instead of lsof (hangs on macOS)
+  try {
+    const listening = execSync(
+      `netstat -anp tcp 2>/dev/null | grep '\\.${startupCdpPort} ' | grep LISTEN`,
+      { encoding: "utf-8", timeout: 3000 }
+    ).trim();
+    if (listening) {
+      console.log(`Stale process detected on CDP port ${startupCdpPort}, attempting cleanup...`);
+      // Try to kill via fuser (available on most systems) as lsof hangs on macOS
+      try {
+        execSync(`kill -9 $(fuser ${startupCdpPort}/tcp 2>/dev/null) 2>/dev/null`, { timeout: 3000 });
+      } catch { /* best effort */ }
+    }
+  } catch {
+    // No process on CDP port — expected
   }
-} catch {
-  // No process on CDP port — expected
 }
 
 // Check for previous crash and notify

@@ -50,7 +50,10 @@ INSPECTION
 
 SERVER
     --server                   Start server for current mode
-    --stop [--all]             Stop server(s)
+    --stop [--all] [--force]   Stop server(s). REFUSES if other sessions have
+                               open pages (the server is SHARED) — use
+                               --cleanup --mine to close only your own tabs,
+                               or --force to kill everything anyway.
     --status                   Show all server states
 
 MODES
@@ -81,8 +84,9 @@ SCRIPTS
 
 DIAGNOSTICS
     --tabs                    List all browser tabs
+    --cleanup --mine          Close only THIS session's pages (end-of-session)
     --cleanup [--all]         Close orphaned tabs
-    --cleanup --project <n>   Close specific project page
+    --cleanup --project <n>   Close specific project's pages
     --debug                   Show debug log
     --crashes                 Show crash logs
     --audit [N|errors]        Show last N audit entries (default 20) or errors only
@@ -97,12 +101,18 @@ OUTPUT FORMATS
     inspect    -> Forms + ARIA refs (e1, e2, ... for use with click/text)
 
 ERRORS
-    ECONNREFUSED/ECONNRESET    Server crashed. Auto-retries once.
-                               Fix: --stop --all && --server
+    ECONNREFUSED/ECONNRESET    Server down. Fix: --server (it handles zombie
+                               restart itself). Do NOT --stop --all — that
+                               kills other sessions' tabs.
     Cannot redeclare client    Remove connect()/page()/disconnect() from script
     Page 'X' not found         Navigate first: goto <url>
     Field 'X' not found        Wrong name. Use --inspect or aria
-    browser-dead               Chrome crashed: --stop --all && --server
+    browser-dead               Chrome crashed. Fix: --server (auto-recovers)
+
+SHARED SERVER ETIQUETTE
+    One server is shared by ALL Claude sessions. Other sessions' tabs live
+    in the same browser. End of session: --cleanup --mine (never --stop).
+    Only --stop --force if --status shows the server truly wedged.
 HELPEOF
 }
 
@@ -149,12 +159,15 @@ if [[ -z "$_AUDIT_ACTIVE" ]]; then
     mkdir -p "$_audit_tmpdir"
     _audit_stdout=$(mktemp "$_audit_tmpdir/audit-out-XXXXXX")
     _audit_stderr=$(mktemp "$_audit_tmpdir/audit-err-XXXXXX")
-    # Re-run: tee stdout, tee stderr (preserving fd separation for caller)
-    { "$0" "$@" 2> >(tee "$_audit_stderr" >&2); } | tee "$_audit_stdout"
-    _ec=${PIPESTATUS[0]}
-    # Small delay to let stderr tee flush
-    sleep 0.05
-    # Write audit entry
+    # Re-run with output captured to FILES, then replay to the caller.
+    # NOT a tee pipeline: if the caller closed stdout early, tee died on
+    # SIGPIPE and the signal propagated into the inner command — successful
+    # clicks exited 141 and sessions "fixed" the phantom failure with
+    # --stop --all, killing every other session's tabs.
+    "$0" "$@" > "$_audit_stdout" 2> "$_audit_stderr"
+    _ec=$?
+    # Write audit entry BEFORE replaying output (replay can still SIGPIPE us,
+    # but by then the real exit code and the log entry are already safe)
     {
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] CMD: dev-browser.sh $*"
         echo "  EXIT: $_ec"
@@ -172,8 +185,11 @@ if [[ -z "$_AUDIT_ACTIVE" ]]; then
         fi
         echo ""
     } >> "$AUDIT_LOG"
-    rm -f "$_audit_stdout" "$_audit_stderr"
     audit_rotate
+    # Replay captured output to the caller (fd separation preserved)
+    cat "$_audit_stdout"
+    cat "$_audit_stderr" >&2
+    rm -f "$_audit_stdout" "$_audit_stderr"
     exit "$_ec"
 fi
 unset _AUDIT_ACTIVE
@@ -206,6 +222,11 @@ while [[ $# -gt 0 ]]; do
             BROWSER_MODE="user"
             shift
             ;;
+        --allow-primary)
+            # Explicit opt-in to drive the user's REAL Brave on :9222 (see safety gate).
+            export DEV_BROWSER_ALLOW_PRIMARY=1
+            shift
+            ;;
         --dev)
             BROWSER_MODE="dev"
             shift
@@ -235,7 +256,7 @@ case "$1" in
         source "$LIB_DIR/server.sh"
         case "$1" in
             --server) start_server; exit $? ;;
-            --stop) stop_server "$2"; exit 0 ;;
+            --stop) shift; stop_server "$@"; exit $? ;;
             --status) server_status; exit 0 ;;
         esac
         ;;

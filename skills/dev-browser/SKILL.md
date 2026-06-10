@@ -81,9 +81,14 @@ Mode persists across commands. First `--stealth` sets mode until `--dev` resets.
 
 ```bash
 dev-browser.sh --server              # Start server for current mode
-dev-browser.sh --stop [--all]        # Stop server(s)
+dev-browser.sh --stop [--all]        # Stop server(s) — REFUSES if other sessions have open pages
+dev-browser.sh --stop --force        # Kill everything, including other sessions' tabs (last resort)
 dev-browser.sh --status              # Show all server states
 ```
+
+**The server is SHARED by all Claude sessions** — its browser holds other sessions' tabs.
+- End of session / done with browser: `dev-browser.sh --cleanup --mine` (closes only YOUR pages). Never `--stop`.
+- Server problems: just run `--server` — it detects zombies and restarts itself. `--stop --force` only if `--server` fails twice.
 
 ## Flags
 
@@ -136,11 +141,12 @@ Rules: plain JS in `evaluate()`. Use `-p` flag for page names. Never use heredoc
 
 | Error | Cause | Fix |
 |-------|-------|-----|
-| `ECONNREFUSED` / `ECONNRESET` | Server crashed (auto-retries once) | `--stop --all` then `--server` |
+| `ECONNREFUSED` / `ECONNRESET` | Server down (auto-retries once) | `--server` (self-recovers; do NOT `--stop --all` — kills other sessions' tabs) |
 | `Cannot redeclare client` | Script has connect()/page() boilerplate | Remove those lines — they're auto-injected |
 | `Page 'X' not found` | No page by that name | Navigate first: `goto <url>` |
 | `Field 'X' not found` | Wrong field name | Use `--inspect` or `aria` to find correct name |
-| `browser-dead` | Chrome crashed | `--stop --all` then `--server` |
+| `browser-dead` | Chrome crashed | `--server` (auto-recovers the zombie). Last resort: `--stop --force` then `--server` |
+| exit 141 with correct output | (historical) SIGPIPE from audit tee | Fixed — treat as success if output looks right |
 
 ## Examples
 
@@ -263,8 +269,9 @@ const fill = await client.fillForm("main", fields);  // Cross-frame smart fill
 
 ```bash
 dev-browser.sh --tabs                    # List all browser tabs
+dev-browser.sh --cleanup --mine          # Close only THIS session's pages (use at end of session)
 dev-browser.sh --cleanup [--all]         # Close orphaned tabs
-dev-browser.sh --cleanup --project <n>   # Close specific project page
+dev-browser.sh --cleanup --project <n>   # Close specific project's pages
 dev-browser.sh --debug                   # Show debug log
 dev-browser.sh --crashes                 # Show crash logs
 dev-browser.sh --wplogin <url>           # WordPress auto-login

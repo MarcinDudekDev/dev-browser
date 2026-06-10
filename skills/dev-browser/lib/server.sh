@@ -3,6 +3,13 @@
 
 # Cleanup ALL orphaned tabs not tracked by the server registry (runs in background)
 cleanup_orphaned_tabs() {
+    # NEVER in user mode: CDP_PORT there is the user's REAL browser (9222) and the
+    # registry is (near) empty, so "close all unregistered tabs" = close ALL the
+    # user's tabs. Catastrophic. User mode only ever touches tabs it created.
+    if [[ "${BROWSER_MODE:-}" == "user" ]]; then
+        log_debug "cleanup_orphaned_tabs: skipped (user mode — never touch the user's tabs)"
+        return 0
+    fi
     {
     # Wait for any pending page creation to complete
     sleep 2
@@ -188,7 +195,9 @@ start_server() {
         if is_our_server; then
             log_debug "Port responds, /health not ok - our zombie, restarting"
             echo "Server in bad state (browser likely crashed), restarting..." >&2
-            stop_server
+            # --force: browser is dead, every session's pages are gone already —
+            # the shared-session guard must not block crash recovery
+            stop_server --force
             sleep 1
         else
             # Foreign holder — NEVER kill it (could be the user's real browser).
@@ -208,8 +217,9 @@ start_server() {
     log_debug "Starting server from $DEV_BROWSER_DIR"
     cd "$DEV_BROWSER_DIR" || { _release_restart_lock; exit 1; }
 
-    # Pass browser mode and ports to server
-    nohup env BROWSER_MODE="$mode" HTTP_PORT="$SERVER_PORT" CDP_PORT="$CDP_PORT" DEV_BROWSER_HOME="$DEV_BROWSER_HOME" ./server.sh > "$SERVER_LOG" 2>&1 &
+    # Pass browser mode and ports to server. DEV_BROWSER_ALLOW_PRIMARY gates user
+    # mode (the node server refuses to attach to the real Brave without it).
+    nohup env BROWSER_MODE="$mode" HTTP_PORT="$SERVER_PORT" CDP_PORT="$CDP_PORT" DEV_BROWSER_HOME="$DEV_BROWSER_HOME" DEV_BROWSER_ALLOW_PRIMARY="${DEV_BROWSER_ALLOW_PRIMARY:-}" ./server.sh > "$SERVER_LOG" 2>&1 &
     local pid=$!
     echo $pid > "$SERVER_PID_FILE"
     log_debug "Server started with PID $pid"
@@ -241,9 +251,45 @@ start_server() {
 
     # Record restart time for cooldown & release lock
     _record_restart
-    cleanup_orphaned_tabs
+    # Orphan-tab cleanup is fatal in user mode (would close the user's real tabs) — dev/stealth only.
+    [[ "$mode" != "user" ]] && cleanup_orphaned_tabs
     _release_restart_lock
     return 0
+}
+
+# Kill a PID and ALL its descendants (server.sh → tsx → node chain).
+# Killing only the top PID orphans the node server: it keeps the HTTP port
+# bound while its browser is gone — the classic "browser-dead" zombie.
+_kill_tree() {
+    local pid="$1" p
+    [[ -z "$pid" ]] && return
+    local kids
+    kids=$(pgrep -P "$pid" 2>/dev/null)
+    for p in $kids; do
+        _kill_tree "$p"
+    done
+    kill "$pid" 2>/dev/null
+    sleep 0.2
+    kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null
+}
+
+# List registry pages on $SERVER_PORT that do NOT belong to this session's
+# project prefix. Empty output = safe to stop. Empty also when the server is
+# unreachable (it's dead — nothing to protect).
+_other_sessions_pages() {
+    local me
+    me=$(get_project_prefix)
+    curl -s -m 3 "http://localhost:$SERVER_PORT/pages" 2>/dev/null | python3 -c "
+import sys, json
+try:
+    pages = json.load(sys.stdin).get('pages', [])
+except Exception:
+    sys.exit(0)
+me = '$me'
+for p in pages:
+    if not p.startswith(me + '-') and p != me:
+        print(p)
+"
 }
 
 stop_server() {
@@ -253,11 +299,45 @@ stop_server() {
     local mode="$(get_current_mode)"
     BROWSER_MODE="$mode"
 
+    # Parse args: --all (every mode), --force (skip shared-session guard)
+    local _all=0 _force=0 a
+    for a in "$@"; do
+        case "$a" in
+            --all) _all=1 ;;
+            --force) _force=1 ;;
+        esac
+    done
+
+    # SHARED-SESSION GUARD: the server (and its browser tabs) is shared by ALL
+    # Claude sessions. If another project still has registered pages, killing
+    # the server destroys their work. Refuse unless --force.
+    if [[ $_force -eq 0 ]]; then
+        local _others=""
+        if [[ $_all -eq 1 ]]; then
+            for m in dev stealth user; do
+                set_mode_vars "$m"
+                _others+=$(_other_sessions_pages)
+            done
+            set_mode_vars "$mode"
+        else
+            set_mode_vars "$mode"
+            _others=$(_other_sessions_pages)
+        fi
+        if [[ -n "$_others" ]]; then
+            echo "REFUSED: other sessions still have open pages on this shared server:" >&2
+            echo "$_others" | sed 's/^/  - /' >&2
+            echo "" >&2
+            echo "Close only YOUR tabs instead:  dev-browser.sh --cleanup --mine" >&2
+            echo "Kill everything anyway:        dev-browser.sh --stop --force" >&2
+            return 1
+        fi
+    fi
+
     # Clear restart cooldown so --stop && --server works as force-restart
     rm -f "$SKILL_TMP_DIR/restart-${mode}.timestamp"
     _release_restart_lock 2>/dev/null
 
-    if [[ "$1" == "--all" ]]; then
+    if [[ $_all -eq 1 ]]; then
         echo "Stopping all dev-browser servers..." >&2
         for m in dev stealth user; do
             set_mode_vars "$m"
@@ -265,7 +345,7 @@ stop_server() {
                 local pid=$(cat "$SERVER_PID_FILE")
                 if kill -0 "$pid" 2>/dev/null; then
                     echo "  Stopping $m server (PID $pid)..." >&2
-                    kill "$pid" 2>/dev/null
+                    _kill_tree "$pid"
                 fi
                 rm -f "$SERVER_PID_FILE"
             fi
@@ -284,16 +364,21 @@ stop_server() {
             local pid=$(cat "$SERVER_PID_FILE")
             if kill -0 "$pid" 2>/dev/null; then
                 echo "Stopping $mode server (PID $pid)..." >&2
-                log_debug "Killing PID $pid"
-                kill "$pid" 2>/dev/null
-                sleep 1
-                # Force kill if still alive
-                kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null
+                log_debug "Killing PID $pid (and descendants)"
+                _kill_tree "$pid"
             fi
             rm -f "$SERVER_PID_FILE"
         fi
-        # Also kill any orphaned server processes for this mode
-        pkill -f "BROWSER_MODE=$mode.*start-server" 2>/dev/null
+        # Reap orphaned node servers still holding THIS mode's HTTP port.
+        # (The old `pkill -f "BROWSER_MODE=$mode.*start-server"` never matched
+        # anything — env vars aren't part of the process command line.)
+        local _orphan
+        for _orphan in $(pgrep -f "start-server.ts" 2>/dev/null); do
+            if lsof -nP -a -p "$_orphan" -iTCP:"$SERVER_PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
+                echo "  Reaping orphaned server PID $_orphan on port $SERVER_PORT..." >&2
+                _kill_tree "$_orphan"
+            fi
+        done
         # Kill orphaned Chromium on this mode's CDP port (not for user mode)
         if [[ "$mode" != "user" ]]; then
             _kill_cdp_browser "$CDP_PORT"

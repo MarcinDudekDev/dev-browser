@@ -73,13 +73,31 @@ cmd_cleanup() {
     local mode="${1:-blank}"
     local project_prefix="$2"
 
+    # --mine: close only THIS session's pages (alias for --project <my-prefix>).
+    # This is the correct end-of-session cleanup — never touches other sessions.
+    if [[ "$mode" == "--mine" ]]; then
+        mode="--project"
+        project_prefix=$(get_project_prefix)
+        echo "Cleaning up pages for project '$project_prefix' only" >&2
+    fi
+
     # Find running server
+    local _found_mode=""
     for _mode in dev stealth user; do
         local _ports=($(get_mode_ports "$_mode"))
         if curl -s --connect-timeout 1 "http://localhost:${_ports[0]}/health" 2>/dev/null | grep -q ok; then
-            SERVER_PORT="${_ports[0]}"; CDP_PORT="${_ports[1]}"; break
+            SERVER_PORT="${_ports[0]}"; CDP_PORT="${_ports[1]}"; _found_mode="$_mode"; break
         fi
     done
+
+    # HARD GUARD: in user mode CDP_PORT is the user's REAL Brave. Bulk-closing
+    # "unregistered"/about:blank tabs would wipe the user's live windows. Only
+    # --project (closes a single page WE registered) is permitted in user mode.
+    if [[ "$_found_mode" == "user" && "$mode" != "--project" ]]; then
+        echo "REFUSED: '--cleanup $mode' is disabled in user mode — it would close the user's real Brave tabs." >&2
+        echo "User mode only ever closes tabs dev-browser itself created. Use '--cleanup --project <prefix>' to close a specific registered page." >&2
+        return 1
+    fi
 
     # Get registered pages from server
     local registry_json
@@ -136,20 +154,22 @@ elif mode == '--project':
         print('Usage: --cleanup --project <prefix>')
         print('Example: --cleanup --project tools')
         sys.exit(1)
-    # Close the registry page for this project via DELETE API
-    page_name = f'{project_prefix}-main'
-    if page_name in registered:
+    # Close ALL registry pages for this project via DELETE API
+    # (a session can have several: prefix-main, prefix-admin, ...)
+    mine = sorted(p for p in registered if p == project_prefix or p.startswith(project_prefix + '-'))
+    if not mine:
+        print(f'No registered pages found for prefix \"{project_prefix}\"')
+        print(f'Registered: {sorted(registered)}')
+        sys.exit(0)
+    import urllib.parse
+    for page_name in mine:
         try:
-            import urllib.parse
             encoded = urllib.parse.quote(page_name)
             req = urllib.request.Request(f'http://localhost:{server_port}/pages/{encoded}', method='DELETE')
-            urllib.request.urlopen(req, timeout=2)
+            urllib.request.urlopen(req, timeout=5)
             print(f'Closed registered page: {page_name}')
         except Exception as e:
             print(f'Failed to close {page_name}: {e}')
-    else:
-        print(f'No registered page found for prefix \"{project_prefix}\"')
-        print(f'Registered: {sorted(registered)}')
     sys.exit(0)
 
 if not to_close:

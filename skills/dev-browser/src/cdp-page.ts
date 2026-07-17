@@ -5,7 +5,8 @@
  * browser (browser-level `Target.setAutoAttach`) and enables Runtime/Network/Log
  * domains on each. Against a heavy real profile (e.g. 156 targets / 57 live tabs)
  * it drowns in the console/log event flood and never settles — even a 60s connect
- * times out. See ~/claude-tmp/dev-browser/USER-MODE-FINDINGS.md.
+ * times out. Measured against a real day-to-day Chrome profile; a fresh profile
+ * with a handful of tabs connects fine, which is why this only bites `--user`.
  *
  * THIS DRIVER instead opens a raw CDP WebSocket to the BROWSER endpoint but NEVER
  * calls `Target.setAutoAttach`. It creates its own tab via `Target.createTarget`

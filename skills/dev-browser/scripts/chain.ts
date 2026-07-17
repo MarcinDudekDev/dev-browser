@@ -1,6 +1,7 @@
 // Chain multiple actions: goto | click | fill | wait
 // Usage: --chain "goto https://site.com | click Login | fill email=test@x.com"
 import { discoverElements, printDiscovery } from "@/discover.js";
+import { resolveField, smartFill } from "@/resolve-field.js";
 
 const chainStr = process.env.SCRIPT_ARGS || "";
 if (!chainStr) {
@@ -66,29 +67,10 @@ for (let i = 0; i < commands.length; i++) {
         const field = arg.substring(0, eqIdx);
         const value = arg.substring(eqIdx + 1);
 
-        // Try name, id, placeholder, label
-        let filled = false;
-        for (const sel of [`[name="${field}"]`, `#${field}`, `[placeholder*="${field}" i]`]) {
-          try {
-            const el = page.locator(sel).first();
-            if (await el.count() > 0) {
-              await el.fill(value);
-              console.log(`  → Filled ${sel}:`, value);
-              filled = true;
-              break;
-            }
-          } catch {}
-        }
-        if (!filled) {
-          try {
-            await page.getByLabel(field).fill(value);
-            console.log(`  → Filled label "${field}":`, value);
-            filled = true;
-          } catch {}
-        }
-        if (!filled) {
-          throw new Error(`Field not found: ${field}`);
-        }
+        const resolved = await resolveField(page, field);
+        if (!resolved) throw new Error(`Field not found: ${field}`);
+        const action = await smartFill(resolved, value);
+        console.log(`  → ${action} ${resolved.matchedBy}:`, value);
         break;
       }
 

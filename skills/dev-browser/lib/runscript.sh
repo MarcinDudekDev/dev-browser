@@ -3,7 +3,8 @@
 
 # Check for crash info and notify agent
 check_crash_recovery() {
-    local sessions_file="$SKILL_TMP_DIR/sessions.json"
+    local mode="${BROWSER_MODE:-dev}"
+    local sessions_file="$SKILL_TMP_DIR/sessions-${mode}.json"
     if [[ -f "$sessions_file" ]] && grep -q '"crashedAt"' "$sessions_file" 2>/dev/null; then
         local crashed_at
         crashed_at=$(grep -o '"crashedAt"[[:space:]]*:[[:space:]]*"[^"]*"' "$sessions_file" | head -1 | sed 's/.*: *"//;s/"//')
@@ -36,7 +37,7 @@ check_crash_recovery() {
 run_script_fast() {
     local shell_script="$1"
     # PROJECT_PREFIX is already exported by dev-browser.sh — use it as-is
-    export SERVER_PORT PAGE_NAME
+    export SERVER_PORT PAGE_NAME DEV_BROWSER_DIR
     bash "$shell_script"
 }
 
@@ -55,6 +56,9 @@ run_script() {
     fi
 
     local PREFIX=$(get_project_prefix)
+    # Export it: src/client.ts reads process.env.PROJECT_PREFIX to tell the server
+    # which project owns a page, so the per-project tab cap can be enforced.
+    export PROJECT_PREFIX="$PREFIX"
     local SCRIPT=""
     local MAX_RETRIES=1
     local retry_count=0
@@ -74,10 +78,16 @@ run_script() {
             -e '/^[[:space:]]*await[[:space:]]+client\.disconnect\(\)/d')
     fi
 
-    # Create temp script file with .mts extension for ESM support
-    get_project_paths  # sets PROJECT_TMP_DIR
+    # Strip imports that the wrapper auto-provides (applies to ALL scripts including builtins)
+    SCRIPT=$(echo "$SCRIPT" | sed -E \
+        -e '/^[[:space:]]*(import|const|let|var).*\{[^}]*(resolveField|smartFill)[^}]*\}.*from/d' \
+        -e '/^[[:space:]]*(import|const|let|var).*\{[^}]*(waitForPageLoad|waitForElement|waitForElementGone|waitForCondition|waitForURL|waitForNetworkIdle)[^}]*\}.*from/d')
+
+    # Create temp script inside DEV_BROWSER_DIR so Bun can resolve @/ path alias
+    # from package.json (Bun searches for package.json from script location, not cwd)
+    mkdir -p "$DEV_BROWSER_DIR/tmp"
     local TEMP_SCRIPT
-    TEMP_SCRIPT=$(mktemp "$PROJECT_TMP_DIR/script-XXXXXX")
+    TEMP_SCRIPT=$(mktemp "$DEV_BROWSER_DIR/tmp/script-XXXXXX")
     mv "$TEMP_SCRIPT" "${TEMP_SCRIPT}.mts"
     TEMP_SCRIPT="${TEMP_SCRIPT}.mts"
     trap "rm -f $TEMP_SCRIPT" EXIT
@@ -91,6 +101,33 @@ const __pageName = (name: string) => __PROJECT_PREFIX + "-" + name;
 
 // Console message collector
 const __consoleMessages: Array<{type: string, text: string}> = [];
+
+// DIALOG RACE GUARD (the browser is SHARED).
+// A JS dialog is dismissed by whichever CDP connection sees it first: any other
+// session's Playwright connection with no dialog listener auto-dismisses it. Our
+// dismiss() then loses the race and rejects with "No dialog is showing" from
+// inside an async event handler — outside every try/catch — killing the run.
+// Measured: 3 whole --run scripts killed this way in 2 days, incl. a 64-page sweep.
+// Layer 2 of the guard (layer 1 is the per-page handler below) — this also covers
+// dialog handlers registered by the USER's own script, which we cannot wrap.
+// Match the FAMILY, not one spelling. A lost race surfaces with at least two
+// different messages depending on who won it, and enumerating today's strings is
+// how these guards rot (see: tool_name 'Task' vs 'Agent'):
+//   "No dialog is showing"                      <- CDP: another CONNECTION dismissed it
+//   "Cannot dismiss dialog which is already handled!"  <- Playwright: this connection did
+// Both mean the same benign thing: the dialog is already gone, so our dismiss had
+// nothing to do. A dismiss that fails because the dialog vanished can never break
+// correctness — the dialog is closed either way — so the whole family is safe to
+// swallow. Real dialog bugs (a dialog that never opens, a hung page) do not land here.
+const __isBenignDialogRace = (err: unknown): boolean => {
+    const m = String((err as {message?: string})?.message ?? err);
+    if (!/dialog/i.test(m)) return false;
+    return /no dialog is showing|already handled|handleJavaScriptDialog/i.test(m);
+};
+process.on("unhandledRejection", (err: unknown): void => {
+    if (__isBenignDialogRace(err)) return;  // another connection already dismissed it
+    throw err;  // anything else keeps today's fail-loud behaviour
+});
 
 // Override client.page to auto-prefix and capture console
 const __originalConnect = (await import("@/client.js")).connect;
@@ -116,6 +153,13 @@ const connect = async (url?: string) => {
         page.on('pageerror', (err: any) => {
             __consoleMessages.push({ type: 'error', text: err.message });
         });
+        // Dialog race guard, layer 1: keep dialogs from blocking the page, but
+        // never let a lost dismiss() race take the process down. Registering this
+        // also stops OUR connection from silently auto-dismissing behind the
+        // user's back — their own handler still runs first if they set one.
+        page.on('dialog', (d: any) => {
+            void Promise.resolve(d.dismiss()).catch(() => {});
+        });
         return page;
     };
     // Expose console messages
@@ -130,6 +174,7 @@ const connect = async (url?: string) => {
     return client;
 };
 const { waitForPageLoad, waitForElement, waitForElementGone, waitForCondition, waitForURL, waitForNetworkIdle } = await import("@/client.js");
+const { resolveField, smartFill } = await import("@/resolve-field.js");
 
 // Auto-injected: client and page (from -p flag, default "main")
 const client = await connect();
@@ -162,7 +207,7 @@ ENDOFSCRIPT
         cd "$DEV_BROWSER_DIR"
         local output
         local exit_code
-        output=$(./node_modules/.bin/tsx "$TEMP_SCRIPT" 2>&1)
+        output=$(run_ts "$TEMP_SCRIPT" 2>&1)
         exit_code=$?
 
         # Success - print output and exit
@@ -179,9 +224,7 @@ ENDOFSCRIPT
                 echo "=== SERVER CONNECTION FAILED ===" >&2
                 echo "Attempting recovery (retry $retry_count/$MAX_RETRIES)..." >&2
 
-                # Stop and restart server
-                stop_server 2>/dev/null
-                sleep 1
+                # Restart server (handles stop, lock, and cooldown internally)
                 start_server || {
                     echo "Failed to restart server" >&2
                     echo "$output"

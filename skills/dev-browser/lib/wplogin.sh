@@ -29,7 +29,7 @@ cmd_wplogin() {
     local escaped_url="${target_url//\\/\\\\}"
     escaped_url="${escaped_url//\"/\\\"}"
 
-    cd "$DEV_BROWSER_DIR" && ./node_modules/.bin/tsx <<WPLOGIN_SCRIPT
+    cd "$DEV_BROWSER_DIR" && run_ts <<WPLOGIN_SCRIPT
 import { connect, waitForPageLoad } from "@/client.js";
 
 const targetUrl = "${escaped_url}";

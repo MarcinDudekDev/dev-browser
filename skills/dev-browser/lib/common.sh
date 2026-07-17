@@ -2,25 +2,37 @@
 # Common variables and functions for dev-browser
 
 # Directories
-SKILL_TMP_DIR="$DEV_BROWSER_DIR/tmp"
+# DEV_BROWSER_HOME: root directory for user data (screenshots, scripts, tmp)
+DEV_BROWSER_HOME="${DEV_BROWSER_HOME:-$HOME/.dev-browser}"
+SKILL_TMP_DIR="$DEV_BROWSER_HOME/tmp"
 mkdir -p "$SKILL_TMP_DIR"
 
 # Config
 MAX_SCREENSHOT_DIM=7500
 DEBUG_LOG="$SKILL_TMP_DIR/debug.log"
+# Audit log always in canonical home dir (not symlink source dir)
+AUDIT_LOG="${HOME}/.dev-browser/audit.log"
+
+# Audit logging — permanent record of every command with input/output
+# Rotate at 10K lines (keep 5K)
+audit_rotate() {
+    if [[ $(wc -l < "$AUDIT_LOG" 2>/dev/null || echo 0) -gt 10000 ]]; then
+        tail -5000 "$AUDIT_LOG" > "$AUDIT_LOG.tmp" && mv "$AUDIT_LOG.tmp" "$AUDIT_LOG"
+    fi
+}
 
 # Multi-server port configuration (each mode gets its own server)
 # Format: HTTP_PORT / CDP_PORT
-#   dev:     9222 / 9223
+#   dev:     9220 / 9221  (moved off 9222 so it can't clash with a real browser)
 #   stealth: 9224 / 9225
 #   user:    9226 / (user's Chrome CDP, typically 9222)
 get_mode_ports() {
     local mode="${1:-dev}"
     case "$mode" in
-        dev)     echo "9222 9223" ;;
+        dev)     echo "9220 9221" ;;
         stealth) echo "9224 9225" ;;
         user)    echo "9226 9222" ;;  # HTTP 9226, connects to user's Chrome on 9222
-        *)       echo "9222 9223" ;;  # default to dev
+        *)       echo "9220 9221" ;;  # default to dev
     esac
 }
 
@@ -46,15 +58,24 @@ set_mode_vars() {
     export SERVER_PORT CDP_PORT SERVER_PID_FILE SERVER_LOG
 }
 
-# Initialize with default mode (will be overridden when mode is known)
-set_mode_vars "dev"
-# DEV_BROWSER_HOME: root directory for user data (screenshots, scripts, tools)
-# Override via env var or set in ~/.dev-browser/config
-DEV_BROWSER_HOME="${DEV_BROWSER_HOME:-$HOME/.dev-browser}"
+# Initialize mode vars only if not already set (dev-browser.sh handles this)
+if [[ -z "$SERVER_PORT" ]]; then
+    set_mode_vars "dev"
+fi
 SCREENSHOTS_DIR="${SCREENSHOTS_DIR:-$DEV_BROWSER_HOME/screenshots}"
 BUILTIN_SCRIPTS_DIR="$DEV_BROWSER_DIR/scripts"
 USER_SCRIPTS_DIR="${USER_SCRIPTS_DIR:-$DEV_BROWSER_HOME/scripts}"
 VISUAL_DIFF="${VISUAL_DIFF:-$DEV_BROWSER_HOME/visual-diff}"
+
+# TypeScript runner: bun for file scripts (140ms), tsx for heredocs (660ms).
+# Playwright's bundled ws doesn't work in Bun (no HTTP upgrade support).
+# Fix: patched utilsBundle.js to use native ws in Bun — see postinstall.sh.
+run_ts() {
+    # TODO: switch back to bun once oven-sh/bun#9911 merges (PR #27859)
+    # Bun is ~2x faster but lacks ws 'upgrade' event, breaking Playwright CDP.
+    # All scripts that go through run_script() use Playwright, so tsx is required.
+    ./node_modules/.bin/tsx "$@"
+}
 
 # Debug logging (keeps last 500 lines)
 log_debug() {
@@ -68,8 +89,37 @@ log_debug() {
 # Check if server is truly healthy (uses /health endpoint)
 check_server_health() {
     local response
-    response=$(curl -s --connect-timeout 2 "http://localhost:$SERVER_PORT/health" 2>/dev/null)
+    response=$(curl -s --connect-timeout 1 -m 2 "http://localhost:$SERVER_PORT/health" 2>/dev/null)
     [[ "$response" == "ok" ]]
+}
+
+# Is the responder on SERVER_PORT one of OUR dev-browser servers (vs a foreign
+# process such as the user's real browser)? Our /health returns "ok" (healthy)
+# or "browser-dead" (zombie); a foreign CDP/HTTP server returns neither.
+is_our_server() {
+    local r
+    r=$(curl -s --connect-timeout 1 -m 2 "http://localhost:$SERVER_PORT/health" 2>/dev/null)
+    [[ "$r" == "ok" || "$r" == "browser-dead" ]]
+}
+
+# Ensure server is healthy, auto-restart once if dead. Exit 1 on failure.
+# Requires server.sh to be sourced (start_server/stop_server available).
+ensure_server() {
+    if check_server_health; then
+        return 0
+    fi
+    # If start_server isn't loaded yet, source it
+    if ! type start_server &>/dev/null; then
+        source "$DEV_BROWSER_DIR/lib/server.sh"
+    fi
+    echo "Server not responding, attempting restart..." >&2
+    log_debug "ensure_server: health check failed, calling start_server (handles lock+cooldown)"
+    # start_server handles zombie detection, stop, lock, and cooldown internally
+    if start_server; then
+        return 0
+    fi
+    print_server_error "Auto-restart failed"
+    exit 1
 }
 
 # Print friendly error with recovery instructions
@@ -92,21 +142,28 @@ print_server_error() {
 # Get project prefix — uses tmux session name (constant per window),
 # falls back to projects.json lookup, then directory basename
 get_project_prefix() {
+    # Return cached result if available
+    if [[ -n "$_cached_project_prefix" ]]; then
+        printf '%s' "$_cached_project_prefix"
+        return
+    fi
+
+    local result=""
+
     # Priority 1: tmux session name (most reliable — constant per window)
     if [[ -n "$TMUX" ]]; then
         local tmux_session
         tmux_session=$(tmux display-message -p '#S' 2>/dev/null)
         if [[ -n "$tmux_session" ]]; then
-            printf '%s' "$tmux_session"
-            return
+            result="$tmux_session"
         fi
     fi
 
     # Priority 2: projects.json lookup by cwd
-    local cwd="$PWD"
-    local prefix=""
-    if [[ -f "$HOME/.claude/projects.json" ]]; then
-        prefix=$(python3 -c "
+    if [[ -z "$result" ]]; then
+        local cwd="$PWD"
+        if [[ -f "$HOME/.claude/projects.json" ]]; then
+            result=$(python3 -c "
 import json, os
 cwd = '$cwd'
 found = None
@@ -122,14 +179,69 @@ except:
 if found:
     print(found, end='')
 " 2>/dev/null)
+        fi
     fi
 
     # Priority 3: directory basename
-    if [[ -z "$prefix" ]]; then
-        prefix=$(basename "$cwd" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | cut -c1-20 | tr -d '\n')
+    if [[ -z "$result" ]]; then
+        result=$(basename "$PWD" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | cut -c1-20 | tr -d '\n')
     fi
 
-    printf '%s' "$prefix"
+    _cached_project_prefix="$result"
+    printf '%s' "$result"
+}
+
+# Resolve page name: accepts a page name, prefixed name, or URL.
+# Echoes the resolved target_name on success. Prints error and returns 1 on failure.
+# Usage: target_name=$(resolve_page_name "$arg" "$pages_json" "$PREFIX") || return 1
+resolve_page_name() {
+    local arg="$1"
+    local pages_json="$2"
+    local prefix="${3:-}"
+
+    # Try prefixed name first
+    if [[ -n "$prefix" ]]; then
+        local full_name="${prefix}-${arg}"
+        if echo "$pages_json" | jq -e --arg n "$full_name" '.pages | index($n)' >/dev/null 2>&1; then
+            echo "$full_name"
+            return 0
+        fi
+    fi
+
+    # Try raw name
+    if echo "$pages_json" | jq -e --arg n "$arg" '.pages | index($n)' >/dev/null 2>&1; then
+        echo "$arg"
+        return 0
+    fi
+
+    # If arg looks like a URL, find page whose current URL matches
+    if [[ "$arg" == http://* || "$arg" == https://* ]]; then
+        local page found_name=""
+        while IFS= read -r page; do
+            local encoded_page
+            encoded_page=$(printf '%s' "$page" | jq -sRr '@uri')
+            local page_url
+            page_url=$(curl -s -m 3 "http://localhost:${SERVER_PORT}/pages/${encoded_page}/url" | jq -r '.url // empty' 2>/dev/null)
+            local norm_arg="${arg%/}" norm_url="${page_url%/}"
+            if [[ "$norm_url" == "$norm_arg" || "$norm_url" == "$norm_arg"* || "$norm_arg" == "$norm_url"* ]]; then
+                found_name="$page"
+                break
+            fi
+        done < <(echo "$pages_json" | jq -r '.pages[]' 2>/dev/null)
+
+        if [[ -n "$found_name" ]]; then
+            echo "$found_name"
+            return 0
+        fi
+        echo "No open page found matching URL '${arg}'. Available pages:" >&2
+        echo "$pages_json" | jq -r '.pages[]' 2>/dev/null | sed 's/^/  - /' >&2
+        return 1
+    fi
+
+    # Not found
+    echo "Page '${arg}' not found. Available pages:" >&2
+    echo "$pages_json" | jq -r '.pages[]' 2>/dev/null | sed 's/^/  - /' >&2
+    return 1
 }
 
 # Get per-project paths for screenshots and temp scripts

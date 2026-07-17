@@ -1,6 +1,6 @@
 import { chromium } from "playwright";
 import type { Browser, BrowserContext, Page } from "playwright";
-import { beforeAll, afterAll, beforeEach, afterEach, describe, test, expect } from "vitest";
+import { beforeAll, afterAll, beforeEach, afterEach, describe, test, expect } from "../../test-shim";
 import { getSnapshotScript, clearSnapshotScriptCache } from "../browser-script";
 
 let browser: Browser;

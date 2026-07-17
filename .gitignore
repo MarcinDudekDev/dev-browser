@@ -54,3 +54,33 @@ ${process.env.HOME}/
 
 # Staging scripts (project-specific)
 skills/dev-browser/scripts/staging/
+
+# dev-browser scratch automation — one-off, task-specific scripts (og_desc, ds-*,
+# challenge-*, apify-*, netnut-*, icecat-*, mg-*, old .sh wrappers, etc.). The real
+# builtins are already-tracked .ts files (chain.ts, click.ts, goto.ts, fill.ts, …)
+# and STAY tracked — gitignore never untracks. Force-add a genuinely new builtin
+# with `git add -f skills/dev-browser/scripts/<name>`.
+skills/dev-browser/scripts/*.ts
+skills/dev-browser/scripts/*.sh
+skills/dev-browser/scripts/*.mts
+skills/dev-browser/scripts/*.mjs
+skills/dev-browser/scripts/*.pl
+skills/dev-browser/scripts/*.py
+#
+# Per-project scratch dirs: ignore EVERY subdirectory, structurally.
+# This used to enumerate the dirs by name, and had already drifted — eight of them
+# were unlisted and therefore unignored, so a single `git add .` would have
+# published private per-client work to what is a PUBLIC repo. A name list can only
+# ever cover the projects you had on the day you wrote it; the next one is always
+# missing, and the failure is silent.
+#
+# Safe as a blanket rule: no tracked builtin lives in a subdirectory — every one
+# of them (chain.ts, click.ts, goto.ts, fill.ts, …) sits at scripts/ root, and
+# gitignore never untracks what is already tracked. A genuinely new builtin still
+# force-adds with `git add -f`.
+skills/dev-browser/scripts/*/
+
+# Scratch probes & backups at the skill root
+skills/dev-browser/mg-*.mjs
+skills/dev-browser/*.bak2
+skills/dev-browser/375/

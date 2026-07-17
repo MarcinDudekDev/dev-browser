@@ -4,538 +4,304 @@ description: Browser automation with persistent page state for navigating sites,
 domain: browser
 type: plugin
 frequency: daily
-commands: [goto, click, fill, text, aria, eval, scroll-to, select, upload, dismiss-consent, --screenshot, --inspect, --stealth, --user, --styles, --element, --annotate, --watch-design, --console-snapshot, --responsive, --resize, --baselines, --wplogin, --list, --scenarios, --debug, --crashes, --tabs, --cleanup]
+commands: [goto, click, fill, text, aria, eval, scroll-to, select, upload, dismiss-consent, --screenshot, "--screenshot --selector", "--screenshot --scroll-to", --inspect, --stealth, --user, --styles, --element, --annotate, --watch-design, --console-snapshot, --responsive, --resize, --baselines, --wplogin, --list, --scenarios, --debug, --crashes, --tabs, --cleanup]
 tools: [dev-browser.sh]
 ---
 
-# Dev Browser Skill (v1.5.0)
+# Dev Browser (v1.5.0)
 
-Browser automation that maintains page state across script executions. Multi-server architecture supports running dev, stealth, and user modes simultaneously.
+Browser automation with persistent page state. Run `dev-browser.sh --help` for the quick reference.
 
-## Table of Contents
-- [Quick Start](#quick-start)
-- [Browser Modes](#browser-modes)
-- [CLI Commands](#full-usage)
-- [TypeScript Scripts](#writing-scripts)
-- [YAML Scenarios](#yaml-scenarios)
-- [Wait Patterns](#waiting)
-- [Multi-Server Modes](#multi-server-architecture)
-- [Debugging](#debugging-tips)
+## Rules
+
+1. **Screenshot path is in OUTPUT.** Run command, read the path, then Read() it. Never pass a path. Never chain with &&. Never guess.
+2. **Never use sleep or setTimeout.** Use event-based waits in scripts.
+3. **Never add 2>&1.** Stdout/stderr are handled correctly.
+4. **Never declare client/page in scripts.** They are auto-injected.
+5. **Recon first.** Never guess selectors. Use: goto -> aria -> --inspect -> screenshot.
+6. **One command per Bash() call.** Do not chain with && or ;.
+7. **If broken after 1 retry:** `msg tools "dev-browser issue: <description>"`
 
 ## Quick Start
 
 ```bash
-# Quick commands (preferred - no --run prefix needed)
-dev-browser.sh goto https://example.com      # Navigate + inspect
-dev-browser.sh click "Submit"                # Click by text/ref/selector
-dev-browser.sh fill email test@example.com   # Fill form field
-dev-browser.sh select country US             # Select dropdown option
-dev-browser.sh text e5                       # Get text from ref/selector
-dev-browser.sh eval 'document.title'         # Evaluate JS in page
-dev-browser.sh scroll-to '.section'          # Scroll element into view
-dev-browser.sh aria                          # Get ARIA snapshot with refs
-
-# Stealth mode (bypasses bot detection)
-dev-browser.sh --stealth goto https://allegro.pl
-
-# Screenshots (path is in OUTPUT - don't pass it!)
-dev-browser.sh --screenshot main
-dev-browser.sh --screenshot main myshot.png  # optional filename
-
-# Tab management
-dev-browser.sh --tabs                        # List all tabs + registered pages
-dev-browser.sh --cleanup                     # Close orphaned about:blank tabs
-dev-browser.sh --cleanup --all               # Close all unregistered tabs
-dev-browser.sh --cleanup --project marketing # Close specific project's page
+dev-browser.sh goto https://example.com          # Navigate (outputs forms/buttons/links)
+dev-browser.sh fill "log=admin pwd=secret"       # Fill multiple fields
+dev-browser.sh fill "Medium=on Bacon=on"         # Check radio/checkbox by label
+dev-browser.sh click "Submit"                    # Click by text/ref/selector
+dev-browser.sh select country US                 # Select dropdown option
+dev-browser.sh text e5                           # Get text from ref/selector
+dev-browser.sh eval 'document.title'             # Evaluate JS in page
+dev-browser.sh aria                              # ARIA snapshot with refs
+dev-browser.sh --screenshot main                 # Full page screenshot
+dev-browser.sh --inspect main                    # Forms + ARIA snapshot
 ```
 
-## Browser Modes
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `goto <url>` | Navigate and inspect (forms, buttons, links) |
+| `click <text\|ref\|selector>` | Click element (text match, ARIA ref, or CSS) |
+| `fill "f1=v1 f2=v2"` | Fill form fields (auto-detects text/checkbox/radio/select) |
+| `fill '{"f":"v"}'` | Fill with JSON (for values containing =) |
+| `select <field> <value>` | Select dropdown option |
+| `text <ref\|selector>` | Get element text content |
+| `eval '<js>'` | Execute JavaScript in page |
+| `aria` | ARIA accessibility tree with [ref=eN] |
+| `scroll-to <selector>` | Scroll element into view |
+| `upload <selector> <path>` | Upload file (searches iframes) |
+| `dismiss-consent` | Close GDPR/cookie overlays |
+
+## Inspection
+
+```bash
+dev-browser.sh --screenshot <page>                     # Full-page screenshot
+dev-browser.sh --screenshot <page> --selector '.css'   # Element screenshot (clipped)
+dev-browser.sh --screenshot <page> --scroll-to '.css'  # Scroll + viewport screenshot
+dev-browser.sh --inspect <page>                        # Forms + ARIA snapshot with refs
+dev-browser.sh --page-status <page>                    # URL/title + page messages
+dev-browser.sh --console-snapshot <page>               # Console messages
+dev-browser.sh --annotate <page>                       # Screenshot with ref labels + bounding boxes
+dev-browser.sh --responsive <page>                     # 4 viewport screenshots + overflow check
+dev-browser.sh --resize <WxH> [page]                   # Resize viewport
+dev-browser.sh --styles <selector> [page]              # CSS cascade inspector
+dev-browser.sh --element <ref|selector> [page]         # Full element inspection
+```
+
+## Modes & Server
 
 | Mode | Flag | Port | Use Case |
 |------|------|------|----------|
-| dev | `--dev` (default) | 9222 | Normal testing |
-| stealth | `--stealth` | 9224 | Anti-fingerprint (bypasses CAPTCHAs) |
+| dev | `--dev` (default) | 9220 | Normal testing |
+| stealth | `--stealth` | 9224 | Anti-fingerprint (bypasses bot detection) |
 | user | `--user` | 9226 | Your real browser session |
 
-**Multi-server:** Each mode runs independently - start all three if needed!
+Mode persists across commands. First `--stealth` sets mode until `--dev` resets.
 
 ```bash
-# Server management
-dev-browser.sh --server              # Start dev server
-dev-browser.sh --stealth --server    # Start stealth server
-dev-browser.sh --status              # Show all servers
-dev-browser.sh --stop                # Stop current mode
-dev-browser.sh --stop --all          # Stop all servers
-
-# Brave/Chrome setup for --user mode
-dev-browser.sh --setup-brave         # Shows setup instructions
+dev-browser.sh --server              # Start server for current mode
+dev-browser.sh --stop [--all]        # Stop server(s) — REFUSES if other sessions have open pages
+dev-browser.sh --stop --force        # Kill everything, including other sessions' tabs (last resort)
+dev-browser.sh --status              # Show all server states
 ```
 
-## Global Flags
+**The server is SHARED by all Claude sessions** — its browser holds other sessions' tabs.
+- End of session / done with browser: `dev-browser.sh --cleanup --mine` (closes only YOUR pages). Never `--stop`.
+- Server problems: just run `--server` — it detects zombies and restarts itself. `--stop --force` only if `--server` fails twice.
 
-- `--dev` / `--stealth` / `--user` - Select browser mode
-- `-p PAGE` / `--page PAGE` - Target page name (default: "main")
-- `--cachebust` - Add cache-busting query param
-- `-q` / `--quiet-console` - Suppress console error output
+## Flags
+
+| Flag | Description |
+|------|-------------|
+| `-p <page>` | Target page name (default: "main") |
+| `--cachebust` | Add cache-busting query param |
+| `-q` | Suppress console error output |
+| `--force` | Force click on hidden elements |
+
+## Scripts
 
 ```bash
-dev-browser.sh --stealth -p checkout goto https://shop.com
-dev-browser.sh --cachebust goto https://example.com
+dev-browser.sh --run <name>              # Run custom TypeScript script
+dev-browser.sh --chain "cmd|cmd|cmd"     # Chain commands
+dev-browser.sh --list                    # List available scripts
+dev-browser.sh --scenario <name>         # Run YAML scenario
+dev-browser.sh --scenarios               # List available scenarios
 ```
 
-**⚠️ DO NOT add `2>&1`** - dev-browser handles stdout/stderr correctly. Just run commands directly:
-```bash
-# Correct
-dev-browser.sh goto https://example.com
+Auto-injected globals (no imports needed):
+- `page`, `client` — Playwright page and client
+- `resolveField(page, target)` — ARIA-first field resolution
+- `smartFill(resolved, value)` — Auto-detects input type
+- `waitForPageLoad`, `waitForElement`, `waitForElementGone`, `waitForCondition`, `waitForURL`, `waitForNetworkIdle`
 
-# Wrong - unnecessary stderr redirect
-dev-browser.sh goto https://example.com 2>&1
-```
-
-## Full Usage
-
-```bash
-# Quick commands
-dev-browser.sh goto <url>            # Navigate + auto-inspect
-dev-browser.sh click <text|ref>      # Click button/link
-dev-browser.sh fill <field> <value>  # Fill input by name/ref/label
-dev-browser.sh text <ref>            # Get element text
-dev-browser.sh aria                  # ARIA snapshot with refs
-
-# Scripts
-dev-browser.sh --run myproject/login # Run custom script
-dev-browser.sh --scenario wp-login   # Run YAML scenario
-dev-browser.sh --chain "goto url|click Submit"
-
-# Inspection
-dev-browser.sh --screenshot main     # Take screenshot
-dev-browser.sh --inspect main        # Forms + ARIA snapshot
-dev-browser.sh --page-status main    # URL, title, state
-dev-browser.sh --console main        # Watch console (Ctrl+C to stop)
-dev-browser.sh --console-snapshot main  # Get existing console messages
-dev-browser.sh --styles '.btn' main  # CSS cascade inspector for selector
-dev-browser.sh --element '#submit'   # Full element inspection (attrs, xpath, box model, events)
-dev-browser.sh --annotate main       # Screenshot with ref labels + bounding box coords
-dev-browser.sh --watch-design main design.png 5  # Live design comparison (score updates on change)
-dev-browser.sh --tabs                # List all open browser tabs
-
-# Visual diff & responsive
-dev-browser.sh --snap main           # Save baseline
-dev-browser.sh --diff main           # Compare to baseline
-dev-browser.sh --baselines           # List saved visual diff baselines
-dev-browser.sh --responsive main     # Multi-viewport screenshots (mobile/tablet/desktop)
-dev-browser.sh --resize 1280x720     # Resize viewport to specific dimensions
-
-# Scripts & scenarios
-dev-browser.sh --list                # List available user scripts
-dev-browser.sh --scenarios           # List available YAML scenarios
-
-# WordPress
-dev-browser.sh --wplogin https://site.local/wp-admin/  # Auto-login to WordPress
-
-# Diagnostics & cleanup
-dev-browser.sh --debug               # Show diagnostic info
-dev-browser.sh --crashes             # Show browser crash logs
-dev-browser.sh --cleanup             # Cleanup stale resources
-```
-
-**Script template** (`$DEV_BROWSER_HOME/scripts/myproject/test.ts`):
+Script template (`$DEV_BROWSER_HOME/scripts/myproject/test.ts`):
 ```typescript
 // client and page are AUTO-INJECTED - do NOT add connect()/page() boilerplate!
-// Default page is "main", override with: dev-browser.sh -p other --run script
 await page.goto("https://example.com");
 await waitForPageLoad(page);
 console.log(await page.title());
 ```
 
-**⚠️ IMPORTANT:** `client` and `page` are automatically available. Do NOT add:
-- ~~`const client = await connect();`~~
-- ~~`const page = await client.page("main");`~~
-- ~~`await client.disconnect();`~~
+Rules: plain JS in `evaluate()`. Use `-p` flag for page names. Never use heredocs.
 
-**⚠️ Use script files, NOT heredocs** - better debugging/reusability.
+## Output Formats
 
----
+| Command | Output |
+|---------|--------|
+| `goto` | `URL: <url>` / `Title: <title>` / `<pageState>` |
+| `click` | `Clicked <type>: <target>` / `URL: ...` / `Title: ...` / `<pageState>` |
+| `fill` | `Filled: f1, f2` / `<pageState>` — on error: `Not found: f` (stderr, exit 1) |
+| `screenshot` | `Screenshot saved: /full/path/to/file.png` |
+| `inspect` | Forms + ARIA refs (e1, e2, ... for use with click/text) |
 
-## CRITICAL: Recon Before Action
+`<pageState>` includes forms, buttons, links, iframes detected on page.
 
-**NEVER guess selectors. NEVER start with screenshots.**
+## Errors
 
-**Decision tree:**
-1. **Source code available?** → Read code, use exact selectors
-2. **After navigation?** → `goto` output has forms/buttons/links (auto-inspect)
-3. **Need more links?** → `--run links` or `--run links all`
-4. **Complex/dynamic page?** → `--inspect` or `getAISnapshot()` (full ARIA tree)
-5. **Visual verification?** → `--screenshot main` (NOT for selectors)
+| Error | Cause | Fix |
+|-------|-------|-----|
+| `ECONNREFUSED` / `ECONNRESET` | Server down (auto-retries once) | `--server` (self-recovers; do NOT `--stop --all` — kills other sessions' tabs) |
+| `Cannot redeclare client` | Script has connect()/page() boilerplate | Remove those lines — they're auto-injected |
+| `Page 'X' not found` | No page by that name | Navigate first: `goto <url>` |
+| `Field 'X' not found` | Wrong field name | Use `--inspect` or `aria` to find correct name |
+| `browser-dead` | Chrome crashed | `--server` (auto-recovers the zombie). Last resort: `--stop --force` then `--server` |
+| exit 141 with correct output | (historical) SIGPIPE from audit tee | Fixed — treat as success if output looks right |
 
-| Method | Token Cost | Output | Use Case |
-|--------|-----------|--------|----------|
-| Source code | 0 | Exact selectors | Local/project sites |
-| `goto` output | Low | Forms, inputs, buttons, iframes, links (15) | After navigation |
-| `--run links` | Low | All links (50 or unlimited) | Navigation discovery |
-| `--inspect` | Medium | Forms + ARIA snapshot refs | Detailed inspection |
-| `getAISnapshot()` | Medium | Full ARIA tree | Complex pages |
-| `--screenshot` | High | Visual only | Verification |
+## Examples
 
-## Setup
-
-The server auto-starts when you run any command. For manual control:
-
+### WordPress Login
 ```bash
-dev-browser.sh --server              # Start dev server (port 9222)
-dev-browser.sh --stealth --server    # Start stealth server (port 9224)
-dev-browser.sh --status              # Check all servers
+dev-browser.sh goto https://site.com/wp-login.php
+# Output: Form #loginform: log[text], pwd[password], wp-submit[submit]
+dev-browser.sh fill "log=admin pwd=secret123"
+# Output: Filled: log, pwd
+dev-browser.sh click "Log In"
+# Output: URL: .../wp-admin/, Title: Dashboard
 ```
 
-### Multi-Server Architecture
-
-Each mode runs on its own port with separate browser profile:
-
-| Mode | HTTP Port | CDP Port | Profile |
-|------|-----------|----------|---------|
-| dev | 9222 | 9223 | profiles/dev |
-| stealth | 9224 | 9225 | profiles/stealth |
-| user | 9226 | 9222* | Your browser |
-
-*User mode connects to your browser's debugging port.
-
-### User Mode Setup (Brave/Chrome)
-
-To use `--user` mode with your real browser:
-
+### Complete Form (text + radio + checkbox + dropdown)
 ```bash
-# Option 1: Start browser with debugging
-open -a 'Brave Browser' --args --remote-debugging-port=9222
-# or
-open -a 'Google Chrome' --args --remote-debugging-port=9222
-
-# Then use
-dev-browser.sh --user goto https://example.com
+dev-browser.sh goto https://site.com/checkout
+dev-browser.sh fill "first_name=John last_name=Doe email=j@test.com Medium=on Bacon=on"
+dev-browser.sh select country Poland
+dev-browser.sh click "Place Order"
 ```
 
-Run `dev-browser.sh --setup-brave` for detailed instructions.
-
-### Server Flags
-
-- `--headless` - No visible browser window
-
-## How It Works
-
-1. **Server** launches a persistent Chromium browser and manages named pages via REST API
-2. **Client** connects to the HTTP server URL and requests pages by name
-3. **Pages persist** - the server owns all page contexts, so they survive client disconnections
-4. **State is preserved** - cookies, localStorage, DOM state all persist between runs
-
-## Writing Scripts
-
-Save to `$DEV_BROWSER_HOME/scripts/{project}/script.ts`, run with `--run {project}/script`.
-
-**Principles:**
-- **Small scripts**: ONE action per script (navigate, click, fill, check)
-- **Log state**: Always output state at end to decide next step
-- **Use -p flag for page names**: `dev-browser.sh -p checkout --run script` instead of hardcoding
-- **Plain JS in evaluate()**: No TypeScript syntax in browser context
-
-```typescript
-// Template - client and page are auto-injected!
-await page.goto("https://example.com");
-await waitForPageLoad(page);
-console.log({ title: await page.title(), url: page.url() });
-```
-
-Run with different pages: `dev-browser.sh -p checkout --run myscript`
-
-**Important:**
-- `tsx` transpiles but doesn't type-check - errors ignored
-- `page.evaluate()` runs in browser - use plain JS only:
-  ```typescript
-  ✅ await page.evaluate(() => document.body.innerText);
-  ❌ await page.evaluate(() => { const el: HTMLElement = document.body; });
-  ```
-
-## Workflow Loop
-
-Follow this pattern for complex tasks:
-
-1. **Write a script** to perform one action
-2. **Run it** and observe the output
-3. **Evaluate** - did it work? What's the current state?
-4. **Decide** - is the task complete or do we need another script?
-5. **Repeat** until task is done
-
-## Client API
-
-```typescript
-// client and page are auto-injected. Additional API:
-const page2 = await client.page("other"); // Get/create additional pages
-const pages = await client.list(); // List all page names
-await client.close("name"); // Close a page
-
-// ARIA Snapshot methods for element discovery and interaction
-const snapshot = await client.getAISnapshot("main"); // Get ARIA accessibility tree
-const element = await client.selectSnapshotRef("main", "e5"); // Get element by ref
-
-// Frame-aware helpers for embedded widgets (Stripe, PayPal, etc.)
-const result = await client.findInFrames("main", "input[name='card']"); // Find in any frame
-const formResult = await client.fillForm("main", { "Card Number": "4242..." }); // Smart form fill
-```
-
-The `page` object is a standard Playwright Page—use normal Playwright methods.
-
-## Pattern Library
-
-Reusable high-level helpers for common flows. Import from `patterns.ts`:
-
-```typescript
-import { login, fillAndSubmit, modal, responsive } from "./patterns";
-
-// WordPress/form login
-await login(page, {
-  url: 'https://site.com/wp-login.php',
-  user: 'admin',
-  pass: 'password'
-});
-
-// Fill + submit (works cross-frame for Stripe/PayPal)
-await fillAndSubmit(page, {
-  fields: { 'email': 'user@test.com', 'message': 'Hello' },
-  submit: 'button[type="submit"]',
-  waitFor: '.success-message'
-});
-
-// Modal interaction
-await modal(page, {
-  open: '.open-settings',
-  action: '.save-button'
-});
-
-// Multi-viewport screenshots
-await responsive(page, {
-  url: 'https://site.com',
-  screenshots: '/tmp/responsive'
-});
-```
-
-**See [`PATTERNS.md`](PATTERNS.md) for full API reference.**
-
-## YAML Scenarios
-
-Declarative browser automation flows. Define multi-step workflows in YAML, execute with `--scenario`.
-
-**Quick example** (`scenarios/examples/wp-login.yaml`):
-```yaml
-name: wp-login
-variables:
-  WP_URL: ${WP_URL:-http://localhost:8080}
-  WP_USER: ${WP_USER:-admin}
-  WP_PASS: ${WP_PASS:-admin}
-steps:
-  - login:
-      url: "{{WP_URL}}/wp-login.php"
-      username: "{{WP_USER}}"
-      password: "{{WP_PASS}}"
-  - screenshot: dashboard.png
-```
-
-**Run:** `dev-browser.sh --scenario wp-login`
-
-**Features:**
-- Variable substitution with env fallbacks
-- Pattern shortcuts (`login`, `fillForm`, `modal`, `responsive`)
-- Assertions, conditionals, error handling
-- Auto-compiles to TypeScript
-
-**See [`scenarios/SCHEMA.md`](scenarios/SCHEMA.md) for complete schema reference.**
-
-## Waiting
-
-### ❌ Anti-Pattern: setTimeout/sleep
-
-**NEVER use `setTimeout`** - flaky, slow, unpredictable. Use event-based waits below.
-
-### ✅ Event-Based Waiting (Use These Instead)
-
-The wrapper auto-imports these helpers. Use them for reliable, fast waits:
-
-```typescript
-// After navigation - wait for page to fully load
-await waitForPageLoad(page);
-
-// After click - wait for result element to appear
-await button.click();
-await waitForElement(page, '.success-message');
-
-// After action - wait for loading spinner to disappear
-await submitBtn.click();
-await waitForElementGone(page, '.loading-spinner');
-
-// After form submit - wait for URL change
-await form.submit();
-await waitForURL(page, '**/thank-you');
-
-// After AJAX action - wait for network to settle
-await saveBtn.click();
-await waitForNetworkIdle(page);
-
-// Wait for JS condition (animation, app state, etc.)
-await waitForCondition(page, () => window.appReady === true);
-await waitForCondition(page, () => !document.querySelector('.animating'));
-```
-
-### Available Wait Functions
-
-| Function | Use When |
-|----------|----------|
-| `waitForPageLoad(page)` | After `goto()` - waits for document + network |
-| `waitForElement(page, selector)` | Waiting for element to appear (modal, result) |
-| `waitForElementGone(page, selector)` | Waiting for element to disappear (spinner, overlay) |
-| `waitForURL(page, pattern)` | After navigation/form submit |
-| `waitForNetworkIdle(page)` | After AJAX actions |
-| `waitForCondition(page, fn)` | Custom JS condition (animations, app state) |
-
-### When setTimeout is Acceptable
-
-Only use `setTimeout` for:
-1. **Intentional delays** (rate limiting, debounce testing)
-2. **Animation observation** (watching visual effects, not waiting for them)
-3. **Debugging** (temporary, remove before commit)
-
-```typescript
-// ✅ OK - Intentional delay for rate limiting
-await new Promise(r => setTimeout(r, 100)); // Rate limit API calls
-
-// ✅ OK - Temporary debugging
-await new Promise(r => setTimeout(r, 5000)); // TODO: remove - just watching animation
-```
-
-## Inspecting Page State
-
-### Screenshots
-
-> **⛔ CRITICAL: Read OUTPUT for the saved path!**
-> ```
-> ❌ WRONG: --screenshot main && Read(...)   # Can't chain!
-> ❌ WRONG: Read("screenshots/main.png")     # Don't guess!
-> ✅ RIGHT: Run command, use path from OUTPUT
-> ```
-
-**Via CLI:**
+### Values Containing = (JSON mode)
 ```bash
+dev-browser.sh fill '{"password":"P@ss=w0rd","comments":"token: abc=="}'
+```
+
+### Stealth Mode
+```bash
+dev-browser.sh --stealth goto https://protected-site.com
+dev-browser.sh fill "email=test@example.com"
 dev-browser.sh --screenshot main
-dev-browser.sh --screenshot main myshot.png  # optional filename
-# Output: Screenshot saved: /Users/.../screenshots/myshot.png
-#         USE THIS PATH from the output!
 ```
 
-**Via script:**
-```typescript
-await page.screenshot({ filename: "screenshot.png" });
-await page.screenshot({ filename: "full.png", fullPage: true });
+### Screenshot Variants
+```bash
+dev-browser.sh --screenshot main                              # Full page
+dev-browser.sh --screenshot main --selector '.hero'           # Element only
+dev-browser.sh --screenshot main --scroll-to '.faq-section'   # Scroll + viewport
+dev-browser.sh --screenshot main --scroll-to 3000             # Scroll to pixel offset
 ```
 
-### ARIA Snapshot (Element Discovery)
+## Fill Resolution Order (ARIA-first)
 
-`getAISnapshot()` returns YAML-formatted accessibility tree with semantic roles, names, states, and stable `[ref=eN]` for interaction.
+`fill` uses `resolveField` which searches in this order:
 
-```typescript
-const snapshot = await client.getAISnapshot("main");
-console.log(snapshot);
+1. **CSS passthrough** — target starts with `.`, `#`, `[` -> used as raw selector
+2. **ARIA by role** — `getByRole(textbox|searchbox|spinbutton|combobox|checkbox|radio, { name: target })` — finds by accessible name
+3. **Exact `[name="target"]`** — CSS attribute selector
+4. **Exact `#target`** — CSS ID selector
+
+`fill email test@x.com` finds by ARIA name first (matching labels like "Email Address"), then falls back to `name` attr, then `id`. No fuzzy matching.
+
+Auto-detection per type: text inputs get `.fill()`, checkboxes/radios get `.check()`, selects get `.selectOption()`. Use `=off` to uncheck.
+
+## Gotchas
+
+### Tally Forms (UUID selectors)
+Tally forms use random UUID `name` attributes that change every session. Never use `input[name="uuid"]` selectors.
+
+Use label-based selection instead:
+```bash
+dev-browser.sh fill "Your website" "https://example.com"  # ARIA finds by label
+dev-browser.sh fill e5 "https://example.com"               # by ARIA ref
 ```
 
-**Example output:**
-```yaml
-- banner:
-  - link "Hacker News" [ref=e1]
-  - navigation:
-    - link "new" [ref=e2]
-    - link "submit" [ref=e3]
-- main:
-  - list:
-    - listitem:
-      - link "Article Title" [ref=e4]
-      - link "328 comments" [ref=e5]
+### React / SPA Forms
+React forms may not have standard `name` attributes. Use ARIA refs:
+```bash
+dev-browser.sh aria                    # Find refs
+dev-browser.sh fill e3 "value"         # Fill by ref
 ```
 
-**Attributes:**
-- `[ref=eN]` - Interaction handle | `[checked]` - Checked | `[disabled]` - Disabled | `[level=N]` - Heading level
-- `/url:` - Link URL | `/placeholder:` - Input placeholder
-
-**Interact with refs:**
-```typescript
-const element = await client.selectSnapshotRef("main", "e2");
-await element.click();
+### Cookie Consent Overlays
+Overlays can block form interaction:
+```bash
+dev-browser.sh dismiss-consent  # Auto-detects and dismisses
 ```
 
-## Working with Iframes (Stripe, PayPal, etc.)
-
-Payment widgets use iframes invisible to normal selectors.
-
-**`findInFrames(pageName, selector, options?)`** - Search all frames:
+### Iframe Widgets (Stripe, PayPal)
+Payment widgets use iframes invisible to normal selectors. In scripts:
 ```typescript
 const result = await client.findInFrames("main", 'input[name="cardnumber"]');
 if (result.element) await result.element.fill("4242424242424242");
 ```
-Options: `timeout` (5000ms), `includeMainFrame` (true)
 
-**`fillForm(pageName, fields, options?)`** - Smart fill by label/name/placeholder across frames:
+Or use `fillForm` for cross-frame smart fill:
 ```typescript
 const result = await client.fillForm("main", {
   "Card Number": "4242424242424242",
   "CVC": "123"
 }, { submit: true });
-console.log(result.filled, result.notFound, result.submitted);
-```
-Options: `timeout` (5000ms), `submit` (false), `clear` (true)
-
-## Gotchas
-
-### Tally Forms (UUID selectors)
-Tally forms use **random UUID `name` attributes** that change every session. Never use `input[name="uuid-here"]` selectors — they'll break next time.
-
-**Instead**, use label-based selection:
-```bash
-dev-browser.sh fill "Your website" "https://example.com"  # by label text
-dev-browser.sh fill e5 "https://example.com"               # by ARIA ref (run 'aria' first)
 ```
 
-### Cookie Consent Overlays
-Google CMP/FC, CookieBot, and OneTrust overlays can block form interaction. Dismiss them:
-```bash
-dev-browser.sh dismiss-consent  # auto-detects and dismisses
-```
+## Wait Patterns
 
-### File Uploads
-Use the `upload` command instead of writing custom scripts:
-```bash
-dev-browser.sh upload 'input[type=file]' /tmp/logo.png
-dev-browser.sh upload e5 /tmp/photo.jpg   # by ARIA ref
-dev-browser.sh upload file /tmp/doc.pdf    # by name attr
-```
-Automatically searches iframes (Tally, embedded forms).
+**Never use `setTimeout` or `sleep`.** Use these event-based waits:
 
-## Debugging Tips
-
-1. **Use getAISnapshot** to see what elements are available and their refs
-2. **Take screenshots** when you need visual context
-3. **Use waitForSelector** before interacting with dynamic content
-4. **Check page.url()** to confirm navigation worked
-5. **Use findInFrames** when selectors work in DevTools but not in scripts (likely in iframe)
-
-## Error Recovery
-
-If a script fails, the page state is preserved. You can:
-
-1. Take a screenshot: `dev-browser.sh --screenshot main`
-2. Check status: `dev-browser.sh --page-status main`
-3. Inspect elements: `dev-browser.sh --inspect main`
-
-Or write a debug script (`$DEV_BROWSER_HOME/scripts/{project}/debug.ts`):
 ```typescript
-// client and page auto-injected
-await page.screenshot({ filename: "debug.png" });
-console.log({
-  url: page.url(),
-  title: await page.title(),
-  bodyText: await page.textContent("body").then((t) => t?.slice(0, 200)),
-});
+await waitForPageLoad(page);                                    // After goto
+await waitForElement(page, '.success-message');                 // Element appears
+await waitForElementGone(page, '.loading-spinner');             // Element disappears
+await waitForURL(page, '**/thank-you');                         // URL changes
+await waitForNetworkIdle(page);                                 // AJAX settles
+await waitForCondition(page, () => window.appReady === true);   // Custom JS condition
 ```
+
+## Client API
+
+```typescript
+const page2 = await client.page("other");          // Get/create additional pages
+const pages = await client.list();                   // List all page names
+await client.close("name");                          // Close a page
+const snapshot = await client.getAISnapshot("main"); // ARIA accessibility tree
+const el = await client.selectSnapshotRef("main", "e5"); // Element by ref
+const result = await client.findInFrames("main", selector); // Cross-frame search
+const fill = await client.fillForm("main", fields);  // Cross-frame smart fill
+```
+
+## Diagnostics
+
+```bash
+dev-browser.sh --tabs                    # List all browser tabs
+dev-browser.sh --cleanup --mine          # Close only THIS session's pages (use at end of session)
+dev-browser.sh --cleanup [--all]         # Close orphaned tabs
+dev-browser.sh --cleanup --project <n>   # Close specific project's pages
+dev-browser.sh --debug                   # Show debug log
+dev-browser.sh --crashes                 # Show crash logs
+dev-browser.sh --wplogin <url>           # WordPress auto-login
+dev-browser.sh --setup-brave             # User-mode setup instructions
+```
+
+## Recon Decision Tree
+
+1. **Source code available?** -> Read code, use exact selectors
+2. **After navigation?** -> `goto` output has forms/buttons/links (auto-inspect)
+3. **Need more links?** -> `--run links` or `--run links all`
+4. **Complex/dynamic page?** -> `--inspect` or `aria` (full ARIA tree)
+5. **Visual verification?** -> `--screenshot main` (NOT for finding selectors)
+
+## YAML Scenarios
+
+Declarative multi-step workflows:
+```yaml
+name: wp-login
+variables:
+  WP_URL: ${WP_URL:-http://localhost:8080}
+steps:
+  - login:
+      url: "{{WP_URL}}/wp-login.php"
+      username: admin
+      password: admin
+  - screenshot: dashboard.png
+```
+
+Run: `dev-browser.sh --scenario wp-login`
+
+See [`scenarios/SCHEMA.md`](scenarios/SCHEMA.md) for complete schema.
+See [`PATTERNS.md`](PATTERNS.md) for reusable pattern library.

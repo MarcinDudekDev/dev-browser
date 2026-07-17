@@ -1,6 +1,7 @@
 // Select dropdown option by ref (e5), name, or CSS selector
 // Usage: select <ref|selector> <value>
 // Value can be: option value, visible text, or index (e.g., "index=2")
+import { resolveField } from "@/resolve-field.js";
 const args = process.env.SCRIPT_ARGS || "";
 if (!args) {
     console.error("Usage: select <ref|selector> <value>");
@@ -53,7 +54,6 @@ if (isRef) {
     let selectedWith = "";
 
     if (looksLikeSelector) {
-        // Use target directly as CSS selector
         try {
             const el = page.locator(target).first();
             if (await el.count() > 0) {
@@ -65,15 +65,8 @@ if (isRef) {
     }
 
     if (!selected) {
-        // Try by name, id
-        const selectors = [
-            `select[name="${target}"]`,
-            `select#${target}`,
-            `[name="${target}"]`,
-            `#${target}`,
-        ];
-
-        for (const sel of selectors) {
+        // Try select-specific selectors first (more precise for <select> elements)
+        for (const sel of [`select[name="${target}"]`, `select#${target}`]) {
             try {
                 const el = page.locator(sel).first();
                 if (await el.count() > 0) {
@@ -87,12 +80,13 @@ if (isRef) {
     }
 
     if (!selected) {
-        // Try by label
-        try {
-            await page.getByLabel(target).selectOption(selectArg);
-            selectedWith = `label:${target}`;
+        // Fall back to ARIA-first resolveField
+        const resolved = await resolveField(page, target);
+        if (resolved) {
+            await resolved.locator.selectOption(selectArg);
+            selectedWith = resolved.matchedBy;
             selected = true;
-        } catch {}
+        }
     }
 
     if (!selected) {

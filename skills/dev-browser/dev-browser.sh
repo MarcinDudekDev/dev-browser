@@ -1,43 +1,145 @@
 #!/bin/bash
-# Dev-browser wrapper - modular version (v1.4.1 - improved timeouts)
-# Usage: dev-browser.sh [options] [script.ts]
-#
-# ╔════════════════════════════════════════════════════════════════════════════╗
-# ║  ⚠️  SCREENSHOT USAGE - READ THIS FIRST!                                   ║
-# ╠════════════════════════════════════════════════════════════════════════════╣
-# ║  ❌ NEVER pass a path:    --screenshot main /tmp/shot.png                  ║
-# ║  ❌ NEVER chain with &&:  --screenshot main && Read(...)                   ║
-# ║  ❌ NEVER guess paths:    Read("/Users/.../screenshots/main.png")          ║
-# ║                                                                            ║
-# ║  ✅ CORRECT: Run the command, READ THE OUTPUT for the actual path          ║
-# ║     Example: --screenshot main                                             ║
-# ║     Output:  Screenshot saved: /Users/.../screenshot_main_1705123456.png   ║
-# ║     Then:    Use that RETURNED path with Read()                            ║
-# ╚════════════════════════════════════════════════════════════════════════════╝
-#
-# ╔════════════════════════════════════════════════════════════════════════════╗
-# ║  ⚠️  AVOID SLEEP PATTERNS - USE EVENT-BASED WAITING!                       ║
-# ╠════════════════════════════════════════════════════════════════════════════╣
-# ║  ❌ BAD:  sleep 3 && dev-browser.sh click 'Submit'                         ║
-# ║  ❌ BAD:  sleep 5; dev-browser.sh --screenshot main                        ║
-# ║                                                                            ║
-# ║  ✅ GOOD: Use event-based waiting in your scripts:                         ║
-# ║     await waitForElement(page, '.success-message');                        ║
-# ║     await waitForURL(page, /success/);                                     ║
-# ║     await waitForNetworkIdle(page);                                        ║
-# ║     await waitForCondition(page, () => document.querySelector('.done'));   ║
-# ║                                                                            ║
-# ║  Sleep + command chains cause backgrounding and timeout issues.            ║
-# ╚════════════════════════════════════════════════════════════════════════════╝
-#
-# Modes:      --dev (default) | --stealth (anti-fingerprint) | --user (main browser)
-# Server:     --server | --stop [--all] | --status (multi-server: each mode runs independently)
-# Quick:      goto <url> | click <ref> | jsclick <ref> | fill <ref> <text> | select <ref> <value> | text <ref> | aria | scroll-to <selector> | eval <js>
-# Screenshots: --screenshot | --snap | --diff | --baselines | --responsive | --resize
-# Inspect:    --inspect | --page-status | --console | --console-snapshot | --styles | --element | --annotate | --watch-design
-# Scripts:    --run <name> | --chain "cmd|cmd" | --list | --scenario | --scenarios
-# Diagnostics: --debug | --crashes | --tabs | --cleanup [--all | --project <prefix>]
-# Other:      --wplogin | --setup-brave | --help
+# Dev-browser wrapper - modular version (v1.5.0 - self-documenting)
+# Run with --help for full man-page reference.
+
+show_help() {
+cat <<'HELPEOF'
+NAME
+    dev-browser — browser automation with persistent page state
+
+SYNOPSIS
+    dev-browser.sh <command> [args]         Quick commands
+    dev-browser.sh --<flag> [page] [args]   Inspection/screenshot commands
+    dev-browser.sh --run <script> [args]    Custom TypeScript scripts
+
+RULES
+    1. Screenshot path is in OUTPUT. Run command, read the path, then Read() it.
+       Never pass a path. Never chain with &&. Never guess.
+    2. Never use sleep or setTimeout. Use event-based waits in scripts.
+    3. Never add 2>&1. Stdout/stderr are handled correctly.
+    4. Never declare client/page in scripts. They are auto-injected.
+    5. Recon first. Never guess selectors. Use: goto -> aria -> --inspect -> screenshot.
+    6. One command per Bash() call. Do not chain with && or ;.
+    7. If broken after 1 retry: msg tools "dev-browser issue: <description>"
+
+COMMANDS
+    goto <url>                 Navigate and inspect (forms, buttons, links)
+    click <text|ref|selector>  Click element (text match, ARIA ref, or CSS)
+    fill "f1=v1 f2=v2"        Fill form fields (auto-detects text/checkbox/radio/select)
+    fill '{"f":"v"}'           Fill with JSON (for values containing =)
+    select <field> <value>     Select dropdown option
+    text <ref|selector>        Get element text content
+    eval '<js>'                Execute JavaScript in page
+    aria                       ARIA accessibility tree with [ref=eN]
+    scroll-to <selector>       Scroll element into view
+    upload <selector> <path>   Upload file (searches iframes)
+    dismiss-consent            Close GDPR/cookie overlays
+
+INSPECTION
+    --screenshot <page>                     Full-page screenshot
+    --screenshot <page> --selector '.css'   Element screenshot (clipped)
+    --screenshot <page> --scroll-to '.css'  Scroll + viewport screenshot
+    --inspect <page>                        Forms + ARIA snapshot with refs
+    --page-status <page>                    URL/title + page messages
+    --console-snapshot <page>               Console messages
+    --annotate <page>                       Screenshot with ref labels + bounding boxes
+    --responsive <page>                     4 viewport screenshots + overflow check
+    --resize <WxH> [page]                   Resize viewport
+    --styles <selector> [page]              CSS cascade inspector
+    --element <ref|selector> [page]         Full element inspection
+
+SERVER
+    --server                   Start server for current mode
+    --stop [--all] [--force]   Stop server(s). REFUSES if other sessions have
+                               open pages (the server is SHARED) — use
+                               --cleanup --mine to close only your own tabs,
+                               or --force to kill everything anyway.
+    --status                   Show all server states
+
+MODES
+    --dev       Default mode (normal testing)
+    --stealth   Anti-fingerprint (bypasses bot detection)
+    --user      Your real browser session (requires --setup-brave first)
+    Mode persists across commands. First --stealth sets mode until --dev resets.
+
+FLAGS
+    -p <page>     Target page name (default: "main")
+    --cachebust   Add cache-busting query param
+    -q            Suppress console error output
+    --force       Force click on hidden elements
+
+SCRIPTS
+    --run <name>              Run custom TypeScript script
+    --chain "cmd|cmd|cmd"     Chain commands
+    --list                    List available scripts
+    --scenario <name>         Run YAML scenario
+    --scenarios               List available scenarios
+
+    Auto-injected globals (no imports needed):
+      page, client, resolveField, smartFill
+      waitForPageLoad, waitForElement, waitForElementGone
+      waitForCondition, waitForURL, waitForNetworkIdle
+
+    Rules: plain JS in evaluate(). Use -p flag for page names.
+
+DIAGNOSTICS
+    --tabs                    List all browser tabs
+    --cleanup --mine          Close only THIS session's pages (end-of-session)
+    --cleanup [--all]         Close orphaned tabs
+    --cleanup --project <n>   Close specific project's pages
+    --debug                   Show debug log
+    --crashes                 Show crash logs
+    --audit [N|errors]        Show last N audit entries (default 20) or errors only
+    --wplogin <url>           WordPress auto-login (admin/admin123)
+    --setup-brave             Show user-mode setup instructions
+
+OUTPUT FORMATS
+    goto       -> URL: <url> / Title: <title> / <pageState>
+    click      -> Clicked <type>: <target> / URL: ... / Title: ... / <pageState>
+    fill       -> Filled: f1, f2 / <pageState>  |  Not found: f (stderr, exit 1)
+    screenshot -> Screenshot saved: /full/path/to/file.png
+    inspect    -> Forms + ARIA refs (e1, e2, ... for use with click/text)
+
+ERRORS
+    ECONNREFUSED/ECONNRESET    Server down. Fix: --server (it handles zombie
+                               restart itself). Do NOT --stop --all — that
+                               kills other sessions' tabs.
+    Cannot redeclare client    Remove connect()/page()/disconnect() from script
+    Page 'X' not found         Navigate first: goto <url>
+    Field 'X' not found        Wrong name. Use --inspect or aria
+    browser-dead               Chrome crashed. Fix: --server (auto-recovers)
+
+SHARED SERVER ETIQUETTE
+    One server is shared by ALL Claude sessions. Other sessions' tabs live
+    in the same browser. End of session: --cleanup --mine (never --stop).
+    Only --stop --force if --status shows the server truly wedged.
+HELPEOF
+}
+
+show_cheatsheet() {
+cat <<'CHEATEOF'
+RULES (dev-browser.sh):
+  1. One command per Bash() call. Never chain with && or ;
+  2. Screenshot path is in OUTPUT — read it, then Read() the file
+  3. Never use sleep/setTimeout. Never add 2>&1
+  4. Never declare client/page in scripts (auto-injected)
+  5. Recon first: goto -> read output -> act
+
+RECIPES:
+  Navigate:           dev-browser.sh goto <url>
+  Screenshot page:    dev-browser.sh --screenshot main
+  Screenshot element: dev-browser.sh --screenshot main --selector 'footer'
+  Screenshot scroll:  dev-browser.sh --screenshot main --scroll-to '.section'
+  Fill form:          dev-browser.sh fill "user=admin pass=secret"
+  Click:              dev-browser.sh click "Submit"
+  Inspect:            dev-browser.sh --inspect main
+  ARIA tree:          dev-browser.sh aria
+
+Full reference: dev-browser.sh --help
+CHEATEOF
+}
+
+# Legacy header kept minimal - see show_help() for full reference
 
 # Resolve script location (follow symlinks)
 SOURCE="${BASH_SOURCE[0]}"
@@ -48,6 +150,49 @@ LIB_DIR="$DEV_BROWSER_DIR/lib"
 
 # Source common functions
 source "$LIB_DIR/common.sh"
+
+# === Audit logging: re-exec self to capture all output ===
+# On first run, re-invoke with _AUDIT_ACTIVE=1, capture stdout+stderr to separate files
+if [[ -z "$_AUDIT_ACTIVE" ]]; then
+    export _AUDIT_ACTIVE=1
+    _audit_tmpdir="${HOME}/.dev-browser/tmp"
+    mkdir -p "$_audit_tmpdir"
+    _audit_stdout=$(mktemp "$_audit_tmpdir/audit-out-XXXXXX")
+    _audit_stderr=$(mktemp "$_audit_tmpdir/audit-err-XXXXXX")
+    # Re-run with output captured to FILES, then replay to the caller.
+    # NOT a tee pipeline: if the caller closed stdout early, tee died on
+    # SIGPIPE and the signal propagated into the inner command — successful
+    # clicks exited 141 and sessions "fixed" the phantom failure with
+    # --stop --all, killing every other session's tabs.
+    "$0" "$@" > "$_audit_stdout" 2> "$_audit_stderr"
+    _ec=$?
+    # Write audit entry BEFORE replaying output (replay can still SIGPIPE us,
+    # but by then the real exit code and the log entry are already safe)
+    {
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] CMD: dev-browser.sh $*"
+        echo "  EXIT: $_ec"
+        if [[ -s "$_audit_stdout" ]]; then
+            _lines=$(wc -l < "$_audit_stdout")
+            echo "  STDOUT (${_lines} lines):"
+            head -50 "$_audit_stdout" | sed 's/^/  | /'
+            [[ $_lines -gt 50 ]] && echo "  | ... (truncated, $_lines total)"
+        fi
+        if [[ -s "$_audit_stderr" ]]; then
+            _lines=$(wc -l < "$_audit_stderr")
+            echo "  STDERR (${_lines} lines):"
+            head -50 "$_audit_stderr" | sed 's/^/  ! /'
+            [[ $_lines -gt 50 ]] && echo "  ! ... (truncated, $_lines total)"
+        fi
+        echo ""
+    } >> "$AUDIT_LOG"
+    audit_rotate
+    # Replay captured output to the caller (fd separation preserved)
+    cat "$_audit_stdout"
+    cat "$_audit_stderr" >&2
+    rm -f "$_audit_stdout" "$_audit_stderr"
+    exit "$_ec"
+fi
+unset _AUDIT_ACTIVE
 
 # Handle global flags: --cachebust, -p/--page, --quiet-console, --stealth, --user
 CACHEBUST_FLAG=0
@@ -75,6 +220,11 @@ while [[ $# -gt 0 ]]; do
             ;;
         --user)
             BROWSER_MODE="user"
+            shift
+            ;;
+        --allow-primary)
+            # Explicit opt-in to drive the user's REAL Brave on :9222 (see safety gate).
+            export DEV_BROWSER_ALLOW_PRIMARY=1
             shift
             ;;
         --dev)
@@ -106,19 +256,34 @@ case "$1" in
         source "$LIB_DIR/server.sh"
         case "$1" in
             --server) start_server; exit $? ;;
-            --stop) stop_server "$2"; exit 0 ;;
+            --stop) shift; stop_server "$@"; exit $? ;;
             --status) server_status; exit 0 ;;
         esac
         ;;
 
     # Diagnostic commands
-    --debug|--crashes|--tabs|--cleanup)
+    --debug|--crashes|--tabs|--cleanup|--audit)
         source "$LIB_DIR/diagnostics.sh"
         case "$1" in
             --debug) cmd_debug; exit 0 ;;
             --crashes) cmd_crashes; exit 0 ;;
             --tabs) cmd_tabs; exit 0 ;;
             --cleanup) shift; cmd_cleanup "$@"; exit 0 ;;
+            --audit)
+                if [[ ! -f "$AUDIT_LOG" ]]; then
+                    echo "No audit log yet." >&2; exit 1
+                fi
+                # --audit errors: show only non-zero exits
+                # --audit N: show last N entries (default 20)
+                if [[ "$2" == "errors" ]]; then
+                    grep -B1 -A20 'EXIT: [^0]' "$AUDIT_LOG" | tail -100
+                else
+                    n="${2:-20}"
+                    # Each entry ends with blank line; show last N entries
+                    awk -v n="$n" 'BEGIN{RS=""; ORS="\n\n"} {a[NR]=$0} END{for(i=NR-n+1;i<=NR;i++) if(i>0) print a[i]}' "$AUDIT_LOG"
+                fi
+                exit 0
+                ;;
         esac
         ;;
 
@@ -128,30 +293,10 @@ case "$1" in
         source "$LIB_DIR/screenshots.sh"
         case "$1" in
             --screenshot)
-                # Use server-side screenshot (server's Page object, avoids stale CDP)
-                start_server || exit 1
-                get_project_paths
-                export SCREENSHOTS_DIR="$PROJECT_SCREENSHOTS_DIR"
-                export PROJECT_PREFIX=$(get_project_prefix)
+                # Use server-side screenshot via curl (avoids client CDP reconnection)
                 shift # consume --screenshot
-                # Parse remaining args: [page] [filename] [--scroll-to <selector|pixels>]
-                _page="" _fname="" _scroll_to=""
-                while [[ $# -gt 0 ]]; do
-                    case "$1" in
-                        --scroll-to) _scroll_to="${2:-}"; shift 2 ;;
-                        --*) echo "WARNING: Unknown flag '$1' ignored" >&2; shift ;;
-                        *) if [[ -z "$_page" ]]; then _page="$1"; elif [[ -z "$_fname" ]]; then _fname="$1"; else echo "WARNING: Unknown argument '$1' ignored" >&2; fi; shift ;;
-                    esac
-                done
-                [[ -n "$_page" ]] && PAGE_NAME="$_page" && export PAGE_NAME
-                export SCRIPT_ARGS="$_fname"
-                [[ -n "$_scroll_to" ]] && export SCROLL_TO="$_scroll_to"
-                export SERVER_PORT
-                cd "$DEV_BROWSER_DIR" && ./node_modules/.bin/tsx "$BUILTIN_SCRIPTS_DIR/screenshot.ts"
-                _exit=$?
-                _latest_shot="$PROJECT_SCREENSHOTS_DIR/$(ls -t "$PROJECT_SCREENSHOTS_DIR" 2>/dev/null | head -1)"
-                [[ -f "$_latest_shot" ]] && resize_screenshot "$_latest_shot" 2>/dev/null
-                exit $_exit
+                cmd_screenshot "$@"
+                exit $?
                 ;;
             --snap) "$VISUAL_DIFF" --snap "${2:-main}"; exit $? ;;
             --diff) "$VISUAL_DIFF" --compare "${2:-main}"; exit $? ;;
@@ -209,7 +354,13 @@ case "$1" in
 
     # Help
     --help|-h)
-        head -10 "$0" | tail -8
+        show_help
+        exit 0
+        ;;
+
+    # Cheatsheet (short version for hook injection)
+    --cheatsheet)
+        show_cheatsheet
         exit 0
         ;;
 
@@ -220,7 +371,7 @@ case "$1" in
         ;;
 
     # Quick browsing commands (no --run prefix, agent-browser style)
-    goto|click|jsclick|text|fill|select|select-react|aria|eval|upload|dismiss-consent|scroll-to|dismiss-overlays|drag|extract)
+    goto|click|jsclick|text|fill|select|select-react|aria|eval|upload|dismiss-consent|scroll-to|dismiss-overlays|drag|extract|slide|inject-cookies|inject-session|keys|wait)
         source "$LIB_DIR/server.sh"
         source "$LIB_DIR/runscript.sh"
         start_server || exit 1
@@ -245,6 +396,10 @@ case "$1" in
             esac
         done
         export SCRIPT_ARGS="${_clean_args[*]}"
+        # Export individual args for commands that need compound selectors (spaces in args)
+        export SCRIPT_ARGC="${#_clean_args[@]}"
+        [[ ${#_clean_args[@]} -ge 1 ]] && export SCRIPT_ARG0="${_clean_args[0]}"
+        [[ ${#_clean_args[@]} -ge 2 ]] && export SCRIPT_ARG1="${_clean_args[1]}"
         export PROJECT_PREFIX=$(get_project_prefix)
         [[ $_force_click -eq 1 ]] && export FORCE_CLICK=1
         run_script "$BUILTIN_SCRIPTS_DIR/$_cmd.ts"

@@ -6,28 +6,28 @@ cmd_inspect() {
     start_server || return 1
     local PREFIX=$(get_project_prefix)
 
-    cd "$DEV_BROWSER_DIR" && ./node_modules/.bin/tsx <<INSPECT_SCRIPT
-import { connect } from "@/client.js";
+    # Resolve page name (accepts name, prefixed name, or URL)
+    local pages_json
+    pages_json=$(curl -s -m 10 "http://localhost:${SERVER_PORT}/pages")
+    local target_name
+    target_name=$(resolve_page_name "$page_name" "$pages_json" "$PREFIX") || return 1
+    local encoded_name
+    encoded_name=$(printf '%s' "$target_name" | jq -sRr '@uri')
 
-const client = await connect("http://localhost:${SERVER_PORT}");
-const pages = await client.list();
-let pageName = "${PREFIX}-${page_name}";
-if (!pages.includes(pageName) && pages.includes("${page_name}")) {
-    pageName = "${page_name}";
-}
-if (!pages.includes(pageName)) {
-    console.log("Page '${page_name}' not found. Available pages:");
-    pages.forEach(p => console.log("  - " + p));
-    await client.disconnect();
-    process.exit(1);
-}
+    # Get URL
+    local url_json
+    url_json=$(curl -s -m 5 "http://localhost:${SERVER_PORT}/pages/${encoded_name}/url")
+    local page_url
+    page_url=$(echo "$url_json" | jq -r '.url // empty' 2>/dev/null)
 
-const page = await client.page(pageName);
-console.log("=== PAGE INSPECT: ${page_name} ===");
-console.log("URL:", page.url());
-console.log("");
+    echo "=== PAGE INSPECT: ${page_name} ==="
+    echo "URL: ${page_url}"
+    echo ""
 
-const info = await page.evaluate(() => {
+    # Get forms/iframes/inputs via evaluate endpoint
+    local eval_code
+    read -r -d '' eval_code << 'JSEOF'
+(() => {
     const forms = Array.from(document.querySelectorAll('form')).map(f => ({
         id: f.id || '(no id)',
         action: f.action || '(no action)',
@@ -35,13 +35,13 @@ const info = await page.evaluate(() => {
             tag: el.tagName.toLowerCase(),
             type: el.type || '',
             name: el.name || el.id || '(unnamed)',
-            value: el.value?.substring(0, 30) || ''
+            value: (el.value || '').substring(0, 30)
         }))
     }));
     const iframes = Array.from(document.querySelectorAll('iframe')).map(f => ({
         name: f.name || '(no name)',
-        src: f.src?.substring(0, 80) || '(no src)',
-        isStripe: f.src?.includes('stripe') || false
+        src: (f.src || '(no src)').substring(0, 80),
+        isStripe: (f.src || '').includes('stripe')
     }));
     const orphanInputs = Array.from(document.querySelectorAll('input:not(form input), select:not(form select)')).slice(0, 10).map(el => ({
         tag: el.tagName.toLowerCase(),
@@ -49,50 +49,63 @@ const info = await page.evaluate(() => {
         name: el.name || el.id || '(unnamed)'
     }));
     return { forms, iframes, orphanInputs };
-});
+})()
+JSEOF
+    local eval_body
+    eval_body=$(jq -nc --arg code "$eval_code" '{code: $code}')
+    local eval_result
+    eval_result=$(curl -s -m 15 -X POST "http://localhost:${SERVER_PORT}/pages/${encoded_name}/evaluate" \
+        -H "Content-Type: application/json" -d "$eval_body")
 
-if (info.forms.length > 0) {
-    console.log("=== FORMS ===");
-    info.forms.forEach((f, i) => {
-        console.log(\`Form #\${i + 1}: id="\${f.id}" action="\${f.action}"\`);
-        f.fields.forEach(field => {
-            console.log(\`  [\${field.tag}] name="\${field.name}" type="\${field.type}" value="\${field.value}"\`);
-        });
-    });
-    console.log("");
-}
+    local info
+    info=$(echo "$eval_result" | jq '.result' 2>/dev/null)
 
-if (info.iframes.length > 0) {
-    console.log("=== IFRAMES ===");
-    info.iframes.forEach(f => {
-        const badge = f.isStripe ? " [STRIPE]" : "";
-        console.log(\`  name="\${f.name}"\${badge}\`);
-        console.log(\`    src: \${f.src}\`);
-    });
-    console.log("");
-}
+    # Print forms
+    local form_count
+    form_count=$(echo "$info" | jq '.forms | length' 2>/dev/null)
+    if [[ "$form_count" -gt 0 ]] 2>/dev/null; then
+        echo "=== FORMS ==="
+        echo "$info" | jq -r '.forms[] | "Form: id=\"\(.id)\" action=\"\(.action)\"", (.fields[] | "  [\(.tag)] name=\"\(.name)\" type=\"\(.type)\" value=\"\(.value)\"")'
+        echo ""
+    fi
 
-if (info.orphanInputs.length > 0) {
-    console.log("=== INPUTS (outside forms) ===");
-    info.orphanInputs.forEach(field => {
-        console.log(\`  [\${field.tag}] name="\${field.name}" type="\${field.type}"\`);
-    });
-    console.log("");
-}
+    # Print iframes
+    local iframe_count
+    iframe_count=$(echo "$info" | jq '.iframes | length' 2>/dev/null)
+    if [[ "$iframe_count" -gt 0 ]] 2>/dev/null; then
+        echo "=== IFRAMES ==="
+        echo "$info" | jq -r '.iframes[] | "  name=\"\(.name)\"\(if .isStripe then " [STRIPE]" else "" end)\n    src: \(.src)"'
+        echo ""
+    fi
 
-const snapshot = await client.getAISnapshot(pageName);
-const lines = snapshot.split('\n');
-const buttons = lines.filter(l => l.includes('button')).slice(0, 5);
-const links = lines.filter(l => l.includes('link "')).slice(0, 5);
-const textboxes = lines.filter(l => l.includes('textbox')).slice(0, 5);
+    # Print orphan inputs
+    local orphan_count
+    orphan_count=$(echo "$info" | jq '.orphanInputs | length' 2>/dev/null)
+    if [[ "$orphan_count" -gt 0 ]] 2>/dev/null; then
+        echo "=== INPUTS (outside forms) ==="
+        echo "$info" | jq -r '.orphanInputs[] | "  [\(.tag)] name=\"\(.name)\" type=\"\(.type)\""'
+        echo ""
+    fi
 
-console.log("=== KEY ELEMENTS (use [ref=eN] with selectSnapshotRef) ===");
-if (buttons.length) { console.log("Buttons:"); buttons.forEach(b => console.log("  " + b.trim())); }
-if (links.length) { console.log("Links:"); links.forEach(l => console.log("  " + l.trim())); }
-if (textboxes.length) { console.log("Textboxes:"); textboxes.forEach(t => console.log("  " + t.trim())); }
-console.log("");
-await client.disconnect();
-INSPECT_SCRIPT
+    # Get ARIA snapshot via server endpoint
+    local aria_result
+    aria_result=$(curl -s -m 35 -X POST "http://localhost:${SERVER_PORT}/pages/${encoded_name}/aria" \
+        -H 'Content-Type: application/json' -d '{}')
+    local snapshot
+    snapshot=$(echo "$aria_result" | jq -r '.snapshot // empty' 2>/dev/null)
+
+    if [[ -n "$snapshot" ]]; then
+        local buttons links textboxes
+        buttons=$(echo "$snapshot" | grep 'button' | head -5)
+        links=$(echo "$snapshot" | grep 'link "' | head -5)
+        textboxes=$(echo "$snapshot" | grep 'textbox' | head -5)
+
+        echo "=== KEY ELEMENTS (use [ref=eN] with click/text) ==="
+        if [[ -n "$buttons" ]]; then echo "Buttons:"; echo "$buttons" | sed 's/^/  /'; fi
+        if [[ -n "$links" ]]; then echo "Links:"; echo "$links" | sed 's/^/  /'; fi
+        if [[ -n "$textboxes" ]]; then echo "Textboxes:"; echo "$textboxes" | sed 's/^/  /'; fi
+        echo ""
+    fi
 }
 
 cmd_page_status() {
@@ -100,28 +113,34 @@ cmd_page_status() {
     start_server || return 1
     local PREFIX=$(get_project_prefix)
 
-    cd "$DEV_BROWSER_DIR" && ./node_modules/.bin/tsx <<STATUS_SCRIPT
-import { connect } from "@/client.js";
+    # Resolve page name
+    local full_name="${PREFIX}-${page_name}"
+    local target_name="$full_name"
+    local pages_json
+    pages_json=$(curl -s -m 10 "http://localhost:${SERVER_PORT}/pages")
+    if ! echo "$pages_json" | jq -e --arg n "$full_name" '.pages | index($n)' >/dev/null 2>&1; then
+        if echo "$pages_json" | jq -e --arg n "$page_name" '.pages | index($n)' >/dev/null 2>&1; then
+            target_name="$page_name"
+        else
+            echo "Page '${page_name}' not found" >&2
+            return 1
+        fi
+    fi
+    local encoded_name
+    encoded_name=$(printf '%s' "$target_name" | jq -sRr '@uri')
 
-const client = await connect("http://localhost:${SERVER_PORT}");
-const pages = await client.list();
-let pageName = "${PREFIX}-${page_name}";
-if (!pages.includes(pageName) && pages.includes("${page_name}")) {
-    pageName = "${page_name}";
-}
-if (!pages.includes(pageName)) {
-    console.log("Page '${page_name}' not found");
-    await client.disconnect();
-    process.exit(1);
-}
+    # Get URL/title
+    local url_json
+    url_json=$(curl -s -m 5 "http://localhost:${SERVER_PORT}/pages/${encoded_name}/url")
 
-const page = await client.page(pageName);
-const status = await page.evaluate(() => {
+    # Evaluate page status via server
+    local eval_code
+    read -r -d '' eval_code << 'JSEOF'
+(() => {
     const getText = (el) => el?.textContent?.trim()?.substring(0, 200) || '';
     const errorSelectors = ['.error', '.alert-error', '.alert-danger', '[class*="error"]', '.warning', '.alert-warning', '[class*="warning"]', '[role="alert"]'];
     const successSelectors = ['.success', '.alert-success', '[class*="success"]'];
     const errors = [], warnings = [], successes = [];
-
     errorSelectors.forEach(sel => {
         document.querySelectorAll(sel).forEach(el => {
             const text = getText(el);
@@ -138,17 +157,33 @@ const status = await page.evaluate(() => {
         });
     });
     return { url: window.location.href, title: document.title, errors: errors.slice(0, 5), warnings: warnings.slice(0, 5), successes: successes.slice(0, 5) };
-});
+})()
+JSEOF
+    local eval_body
+    eval_body=$(jq -nc --arg code "$eval_code" '{code: $code}')
+    local eval_result
+    eval_result=$(curl -s -m 15 -X POST "http://localhost:${SERVER_PORT}/pages/${encoded_name}/evaluate" \
+        -H "Content-Type: application/json" -d "$eval_body")
 
-console.log("=== PAGE STATUS: ${page_name} ===");
-console.log("URL:", status.url);
-console.log("Title:", status.title);
-if (status.errors.length > 0) { console.log("\n❌ ERRORS:"); status.errors.forEach(e => console.log("  ", e)); }
-if (status.warnings.length > 0) { console.log("\n⚠️  WARNINGS:"); status.warnings.forEach(w => console.log("  ", w)); }
-if (status.successes.length > 0) { console.log("\n✅ SUCCESS:"); status.successes.forEach(s => console.log("  ", s)); }
-if (status.errors.length === 0 && status.warnings.length === 0 && status.successes.length === 0) { console.log("\n(No status messages detected)"); }
-await client.disconnect();
-STATUS_SCRIPT
+    local status_data
+    status_data=$(echo "$eval_result" | jq '.result' 2>/dev/null)
+
+    echo "=== PAGE STATUS: ${page_name} ==="
+    echo "URL: $(echo "$status_data" | jq -r '.url // empty')"
+    echo "Title: $(echo "$status_data" | jq -r '.title // empty')"
+
+    local err_count warn_count succ_count
+    err_count=$(echo "$status_data" | jq '.errors | length' 2>/dev/null)
+    warn_count=$(echo "$status_data" | jq '.warnings | length' 2>/dev/null)
+    succ_count=$(echo "$status_data" | jq '.successes | length' 2>/dev/null)
+
+    [[ "$err_count" -gt 0 ]] 2>/dev/null && { echo ""; echo "ERRORS:"; echo "$status_data" | jq -r '.errors[] | "  " + .'; }
+    [[ "$warn_count" -gt 0 ]] 2>/dev/null && { echo ""; echo "WARNINGS:"; echo "$status_data" | jq -r '.warnings[] | "  " + .'; }
+    [[ "$succ_count" -gt 0 ]] 2>/dev/null && { echo ""; echo "SUCCESS:"; echo "$status_data" | jq -r '.successes[] | "  " + .'; }
+    if [[ "$err_count" -eq 0 && "$warn_count" -eq 0 && "$succ_count" -eq 0 ]] 2>/dev/null; then
+        echo ""
+        echo "(No status messages detected)"
+    fi
 }
 
 cmd_console() {
@@ -165,7 +200,7 @@ cmd_console() {
         echo "Watching console for page '${page_name}' (Ctrl+C to stop)..." >&2
     fi
 
-    cd "$DEV_BROWSER_DIR" && ./node_modules/.bin/tsx <<CONSOLE_SCRIPT
+    cd "$DEV_BROWSER_DIR" && run_ts <<CONSOLE_SCRIPT
 import { connect } from "@/client.js";
 
 const client = await connect("http://localhost:${SERVER_PORT}");
@@ -307,7 +342,7 @@ cmd_styles() {
     local escaped_selector="${selector//\\/\\\\}"  # escape backslashes first
     escaped_selector="${escaped_selector//\"/\\\"}"  # escape double quotes
 
-    cd "$DEV_BROWSER_DIR" && ./node_modules/.bin/tsx <<STYLES_SCRIPT
+    cd "$DEV_BROWSER_DIR" && run_ts <<STYLES_SCRIPT
 import { connect } from "@/client.js";
 
 const client = await connect("http://localhost:${SERVER_PORT}");
@@ -515,7 +550,7 @@ cmd_element() {
     local escaped_selector="${selector//\\/\\\\}"
     escaped_selector="${escaped_selector//\"/\\\"}"
 
-    cd "$DEV_BROWSER_DIR" && ./node_modules/.bin/tsx <<ELEMENT_SCRIPT
+    cd "$DEV_BROWSER_DIR" && run_ts <<ELEMENT_SCRIPT
 import { connect } from "@/client.js";
 
 const client = await connect("http://localhost:${SERVER_PORT}");
@@ -1008,7 +1043,7 @@ cmd_annotate() {
     fi
     local screenshot_path="$PROJECT_SCREENSHOTS_DIR/$output_file"
 
-    cd "$DEV_BROWSER_DIR" && ./node_modules/.bin/tsx <<ANNOTATE_SCRIPT
+    cd "$DEV_BROWSER_DIR" && run_ts <<ANNOTATE_SCRIPT
 import { connect } from "@/client.js";
 import * as fs from "fs";
 import * as path from "path";
@@ -1247,7 +1282,7 @@ cmd_watch_design() {
 
     # Run a SINGLE persistent tsx script that maintains ONE browser connection
     # and outputs screenshot paths to stdout for the shell loop to process
-    cd "$DEV_BROWSER_DIR" && ./node_modules/.bin/tsx <<WATCH_SCRIPT &
+    cd "$DEV_BROWSER_DIR" && run_ts <<WATCH_SCRIPT &
 import { connect } from "@/client.js";
 import { execFileSync } from "child_process";
 import * as fs from "fs";

@@ -1,6 +1,7 @@
 import express, { type Express, type Request, type Response } from "express";
 import { chromium, type BrowserContext, type Page } from "playwright";
 import { mkdirSync, existsSync, readFileSync, writeFileSync, rmSync } from "fs";
+import { execFile } from "child_process";
 import { join } from "path";
 import type { Socket } from "net";
 import type {
@@ -30,6 +31,7 @@ const HTTP = {
   NOT_FOUND: 404,
   TIMEOUT: 408,
   GONE: 410,
+  TOO_MANY_REQUESTS: 429,
   SERVER_ERROR: 500,
   BAD_GATEWAY: 502,
   SERVICE_UNAVAILABLE: 503,
@@ -56,6 +58,12 @@ const LIMITS = {
   MOUSE_RANGE: 60,
   MOUSE_JITTER: 100,
   MAX_PAGE_NAME: 256,
+  // Open tabs cost ~85 MB of browser RSS EACH (measured: 0 tabs = 101 MB,
+  // 65 tabs = 5488 MB). Tabs also linger — sessions reuse names but rarely close
+  // pages, so a sweep that opens a tab per URL can leave GBs resident in the
+  // SHARED browser, hurting every other session. Cap what one project can hold.
+  // Override per-server with DEV_BROWSER_MAX_PAGES.
+  MAX_PAGES_PER_PROJECT: Number(process.env.DEV_BROWSER_MAX_PAGES ?? 5),
   RETRY_DELAY: 500,
   MAX_TEXT_LENGTH: 30,
   MAX_VALUE_LENGTH: 20,
@@ -71,6 +79,37 @@ const DEFAULT_USER_CDP_PORT = 9222;
 const MAX_PORT = 65535;
 const DEFAULT_MAX_RETRIES = 5;
 const DEFAULT_RETRY_DELAY = 500;
+
+// ── Focus preservation (macOS, headful only) ────────────────────
+// Creating a tab in a HEADFUL Chromium activates the app and yanks focus away
+// from whatever the human is typing into. Measured on macOS: reusing an existing
+// page steals nothing, creating a tab makes "Google Chrome for Testing"
+// frontmost. Nothing in this codebase calls bringToFront() — Chromium does it on
+// its own, and there is no flag to disable it. So we note who was frontmost
+// before creating a tab and hand focus straight back afterwards.
+// Best-effort by design: never blocks or fails page creation.
+const isMac = process.platform === "darwin";
+
+async function frontmostApp(): Promise<string | undefined> {
+  if (!isMac) return undefined;
+  return new Promise<string | undefined>((resolve): void => {
+    execFile(
+      "osascript",
+      ["-e", 'tell application "System Events" to get name of first application process whose frontmost is true'],
+      (err: unknown, stdout: string): void => {
+        resolve(err ? undefined : stdout.trim() || undefined);
+      },
+    );
+  });
+}
+
+function restoreFocus(appName: string | undefined): void {
+  // Chromium legitimately being frontmost before is a no-op worth skipping.
+  if (!isMac || !appName || appName.startsWith("Google Chrome")) return;
+  execFile("osascript", ["-e", `tell application "${appName.replace(/"/g, "")}" to activate`], (): void => {
+    // best-effort: the app may have quit, or lack automation permission
+  });
+}
 
 // Helper to retry fetch with exponential backoff
 async function fetchWithRetry(
@@ -469,10 +508,41 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
       }
     }
     if (!entry) {
+      // TAB CAP — only on the CREATE path. Reusing an existing page is never
+      // blocked, so a capped project can still work indefinitely with the tabs
+      // it already holds; only *growing* the footprint is refused.
+      // Refuse rather than evict: closing someone's oldest tab could destroy
+      // work in flight. A refusal is recoverable, a wrong eviction is not.
+      const { project } = body;
+      if (project) {
+        const owned = Array.from(registry.keys()).filter((n: string): boolean =>
+          n.startsWith(`${project}-`),
+        );
+        if (owned.length >= LIMITS.MAX_PAGES_PER_PROJECT) {
+          res.status(HTTP.TOO_MANY_REQUESTS).json({
+            error:
+              `Tab limit reached: project "${project}" already holds ${String(owned.length)} pages ` +
+              `(limit ${String(LIMITS.MAX_PAGES_PER_PROJECT)}): ${owned.join(", ")}. ` +
+              `Each open tab costs ~85MB in the SHARED browser, so close what you finished with:\n` +
+              `  dev-browser.sh --cleanup --mine        # close this project's pages\n` +
+              `  await client.close("<name>")           # close one from a script\n` +
+              `Reuse an existing page name instead of opening another, or raise the cap with ` +
+              `DEV_BROWSER_MAX_PAGES=N when starting the server.`,
+            pages: owned,
+            limit: LIMITS.MAX_PAGES_PER_PROJECT,
+          });
+          return;
+        }
+      }
       // Ensure browser context is alive (auto-relaunch if crashed)
       await ensureContext();
+      // Note who has focus BEFORE the tab exists — creating it will steal focus
+      // in headful mode (see frontmostApp/restoreFocus). Headless steals nothing,
+      // so don't pay for the check.
+      const focusedBefore = headless ? undefined : await frontmostApp();
       // Create new page in the persistent context (with timeout to prevent hangs)
       const page = await withTimeout(context.newPage(), TIMEOUTS.LONG, "Page creation timed out after 30s");
+      restoreFocus(focusedBefore);
 
       // Register early to protect from cleanup_orphaned_tabs race:
       // the cleanup checks registry before closing any tab, so we must

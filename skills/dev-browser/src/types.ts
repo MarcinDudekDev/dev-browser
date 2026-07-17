@@ -16,6 +16,15 @@ export interface ServeOptions {
 
 export interface GetPageRequest {
   name: string;
+  /**
+   * Owning project (= tmux session name, which is also the page-name prefix).
+   * Sent by the client from PROJECT_PREFIX so the server can enforce a
+   * per-project tab cap. The server cannot derive this from `name`: prefixes
+   * themselves contain hyphens ("asrowerowy-system-main"), so splitting on "-"
+   * guesses wrong. Optional — an unknown owner is left uncapped rather than
+   * mis-capped against someone else's tabs.
+   */
+  project?: string;
 }
 
 export interface GetPageResponse {

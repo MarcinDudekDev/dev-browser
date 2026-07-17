@@ -56,6 +56,9 @@ run_script() {
     fi
 
     local PREFIX=$(get_project_prefix)
+    # Export it: src/client.ts reads process.env.PROJECT_PREFIX to tell the server
+    # which project owns a page, so the per-project tab cap can be enforced.
+    export PROJECT_PREFIX="$PREFIX"
     local SCRIPT=""
     local MAX_RETRIES=1
     local retry_count=0
@@ -99,6 +102,33 @@ const __pageName = (name: string) => __PROJECT_PREFIX + "-" + name;
 // Console message collector
 const __consoleMessages: Array<{type: string, text: string}> = [];
 
+// DIALOG RACE GUARD (the browser is SHARED).
+// A JS dialog is dismissed by whichever CDP connection sees it first: any other
+// session's Playwright connection with no dialog listener auto-dismisses it. Our
+// dismiss() then loses the race and rejects with "No dialog is showing" from
+// inside an async event handler — outside every try/catch — killing the run.
+// Measured: 3 whole --run scripts killed this way in 2 days, incl. a 64-page sweep.
+// Layer 2 of the guard (layer 1 is the per-page handler below) — this also covers
+// dialog handlers registered by the USER's own script, which we cannot wrap.
+// Match the FAMILY, not one spelling. A lost race surfaces with at least two
+// different messages depending on who won it, and enumerating today's strings is
+// how these guards rot (see: tool_name 'Task' vs 'Agent'):
+//   "No dialog is showing"                      <- CDP: another CONNECTION dismissed it
+//   "Cannot dismiss dialog which is already handled!"  <- Playwright: this connection did
+// Both mean the same benign thing: the dialog is already gone, so our dismiss had
+// nothing to do. A dismiss that fails because the dialog vanished can never break
+// correctness — the dialog is closed either way — so the whole family is safe to
+// swallow. Real dialog bugs (a dialog that never opens, a hung page) do not land here.
+const __isBenignDialogRace = (err: unknown): boolean => {
+    const m = String((err as {message?: string})?.message ?? err);
+    if (!/dialog/i.test(m)) return false;
+    return /no dialog is showing|already handled|handleJavaScriptDialog/i.test(m);
+};
+process.on("unhandledRejection", (err: unknown): void => {
+    if (__isBenignDialogRace(err)) return;  // another connection already dismissed it
+    throw err;  // anything else keeps today's fail-loud behaviour
+});
+
 // Override client.page to auto-prefix and capture console
 const __originalConnect = (await import("@/client.js")).connect;
 const connect = async (url?: string) => {
@@ -122,6 +152,13 @@ const connect = async (url?: string) => {
         });
         page.on('pageerror', (err: any) => {
             __consoleMessages.push({ type: 'error', text: err.message });
+        });
+        // Dialog race guard, layer 1: keep dialogs from blocking the page, but
+        // never let a lost dismiss() race take the process down. Registering this
+        // also stops OUR connection from silently auto-dismissing behind the
+        // user's back — their own handler still runs first if they set one.
+        page.on('dialog', (d: any) => {
+            void Promise.resolve(d.dismiss()).catch(() => {});
         });
         return page;
     };

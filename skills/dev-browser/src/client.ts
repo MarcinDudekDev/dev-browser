@@ -495,11 +495,24 @@ export async function connect(serverUrl = "http://localhost:9222"): Promise<DevB
     const res = await fetch(`${serverUrl}/pages`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name } satisfies GetPageRequest),
+      // PROJECT_PREFIX is exported by dev-browser.sh; it tells the server which
+      // project owns this page so it can enforce the per-project tab cap. The
+      // server cannot infer it from the name (prefixes contain hyphens).
+      body: JSON.stringify({
+        name,
+        project: process.env.PROJECT_PREFIX,
+      } satisfies GetPageRequest),
     });
 
     if (!res.ok) {
-      throw new Error(`Failed to get page: ${await res.text()}`);
+      const raw = await res.text();
+      // The tab-cap refusal carries an actionable multi-line message; surface it
+      // as-is instead of burying it in a JSON blob the agent has to decode.
+      let structured: string | undefined;
+      try {
+        structured = (JSON.parse(raw) as { error?: string }).error;
+      } catch { /* not JSON — fall back to the raw body below */ }
+      throw new Error(structured ?? `Failed to get page: ${raw}`);
     }
 
     const { targetId } = (await res.json()) as GetPageResponse;

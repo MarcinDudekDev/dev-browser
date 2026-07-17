@@ -1,8 +1,13 @@
 {
   "name": "dev-browser-marketplace",
   "owner": {
+    "name": "Marcin Dudek",
+    "email": "marcin.dudek.dev@gmail.com"
+  },
+  "originalAuthor": {
     "name": "Sawyer Hood",
-    "email": "sawyerjhood@gmail.com"
+    "email": "sawyerjhood@gmail.com",
+    "note": "Original author of dev-browser; this is a fork with additional fixes (tab cap, focus preservation, dialog-race guard, and packaging fixes)."
   },
   "plugins": [
     {

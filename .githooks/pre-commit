@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Guards for the public dev-browser repo. /bin/bash here is 3.2.57 — no mapfile,
+# no associative arrays, no ${var,,}. Pipe-into-while is avoided throughout: it
+# runs the body in a subshell, so an exit inside it would not fail the commit.
+set -euo pipefail
+ROOT=$(git rev-parse --show-toplevel)
+
+# A nested .git under the skill shadows the real repo and reports hundreds of
+# phantom changes. One lived here for months.
+if [[ -e "$ROOT/skills/dev-browser/.git" ]]; then
+  echo "REFUSING: nested skills/dev-browser/.git" >&2
+  exit 1
+fi
+
+# scripts/ must not come back: a writable dir by that name is the original bug.
+while IFS= read -r f; do
+  [[ -z "$f" ]] && continue
+  echo "REFUSING path under obsolete scripts/ (use builtins/ or the scratch dir): $f" >&2
+  exit 1
+done < <(git diff --cached --name-only -- 'skills/dev-browser/scripts' 2>/dev/null || true)
+
+# The allowlist lives OUTSIDE the dir it governs, so adding a builtin cannot
+# quietly authorise itself.
+ALLOW="$ROOT/skills/dev-browser/ALLOWED_BUILTINS"
+if [[ -f "$ALLOW" ]]; then
+  while IFS= read -r f; do
+    [[ -z "$f" ]] && continue
+    base=$(basename -- "$f")
+    if ! grep -Fxq -- "$base" "$ALLOW"; then
+      echo "REFUSING non-allowlisted builtin: $f" >&2
+      echo "  A throwaway script belongs in \$(dev-browser.sh --scratch-dir)." >&2
+      echo "  A real new builtin: add '$base' to skills/dev-browser/ALLOWED_BUILTINS." >&2
+      exit 1
+    fi
+  done < <(git diff --cached --name-only --diff-filter=d -- 'skills/dev-browser/builtins' 2>/dev/null || true)
+fi
+
+# Every dispatcher verb must still have a tracked .ts backend.
+bash "$ROOT/skills/dev-browser/bin/check-dispatcher-backends.sh"

@@ -52,33 +52,21 @@ screenshots/
 # Broken untracked dir from process.env expansion
 ${process.env.HOME}/
 
-# Staging scripts (project-specific)
-skills/dev-browser/scripts/staging/
-
-# dev-browser scratch automation — one-off, task-specific scripts (og_desc, ds-*,
-# challenge-*, apify-*, netnut-*, icecat-*, mg-*, old .sh wrappers, etc.). The real
-# builtins are already-tracked .ts files (chain.ts, click.ts, goto.ts, fill.ts, …)
-# and STAY tracked — gitignore never untracks. Force-add a genuinely new builtin
-# with `git add -f skills/dev-browser/scripts/<name>`.
-skills/dev-browser/scripts/*.ts
-skills/dev-browser/scripts/*.sh
-skills/dev-browser/scripts/*.mts
-skills/dev-browser/scripts/*.mjs
-skills/dev-browser/scripts/*.pl
-skills/dev-browser/scripts/*.py
+# The blanket ignore rules that used to live here are GONE on purpose.
 #
-# Per-project scratch dirs: ignore EVERY subdirectory, structurally.
-# This used to enumerate the dirs by name, and had already drifted — eight of them
-# were unlisted and therefore unignored, so a single `git add .` would have
-# published private per-client work to what is a PUBLIC repo. A name list can only
-# ever cover the projects you had on the day you wrote it; the next one is always
-# missing, and the failure is silent.
+# skills/dev-browser/scripts/ was three things at once — published backends, private
+# per-client scratch, and private tools — so the only way to keep the private two out
+# of this public repo was to ignore *.ts/*.sh/*.pl wholesale. That rule could not tell
+# a backend from a scratch file, so it silently swallowed seven real command backends:
+# they lived on disk, the dispatcher called them, and the public repo shipped without
+# them for months. Nobody noticed, because an ignored file looks exactly like a
+# committed one until someone clones.
 #
-# Safe as a blanket rule: no tracked builtin lives in a subdirectory — every one
-# of them (chain.ts, click.ts, goto.ts, fill.ts, …) sits at scripts/ root, and
-# gitignore never untracks what is already tracked. A genuinely new builtin still
-# force-adds with `git add -f`.
-skills/dev-browser/scripts/*/
+# The fix is layout, not a smarter pattern. Scratch now lives in
+# ~/claude-tmp/<slug>/dev-browser/ and private tools in ~/dev-browser-private/ — both
+# outside every worktree, so nothing under skills/dev-browser/builtins/ needs hiding
+# and everything there is tracked. .githooks/pre-commit refuses any staged path under
+# the old scripts/ name and any builtin missing from ALLOWED_BUILTINS.
 
 # Scratch probes & backups at the skill root
 skills/dev-browser/mg-*.mjs

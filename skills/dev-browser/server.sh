@@ -43,7 +43,7 @@ echo "Browser mode: $BROWSER_MODE (HTTP: $HTTP_PORT, CDP: $CDP_PORT)"
 # otherwise `kill <pidfile>` kills only this wrapper and orphans the node
 # process, which keeps the port bound with a dead browser (zombie state)
 if [[ -x ./node_modules/.bin/tsx ]]; then
-    exec ./node_modules/.bin/tsx scripts/start-server.ts
+    exec ./node_modules/.bin/tsx builtins/start-server.ts
 else
-    exec npx tsx scripts/start-server.ts
+    exec npx tsx builtins/start-server.ts
 fi

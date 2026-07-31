@@ -406,7 +406,7 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
       console.error("  Brave:");
       console.error("    open -a 'Brave Browser' --args --remote-debugging-port=9222");
       console.error("");
-      console.error("  Run setup helper: ./scripts/setup-brave-debug.sh");
+      console.error("  Run setup helper: ./builtins/setup-brave-debug.sh");
       console.error("================================\n");
       throw err;
     }

@@ -49,7 +49,11 @@ All source code lives in `skills/dev-browser/`:
 - `src/client.ts` - Client: connects to server, retrieves pages by name via CDP
 - `src/types.ts` - Shared TypeScript types for API requests/responses
 - `src/dom/` - DOM tree extraction utilities for LLM-friendly page inspection
-- `scripts/start-server.ts` - Entry point to start the server
+- `builtins/start-server.ts` - Entry point to start the server
+- `builtins/` - the published command surface: one backend per dispatcher verb.
+  Throwaway per-task scripts do NOT belong here — write them to the scratch dir
+  (`dev-browser.sh --scratch-dir`, i.e. `~/claude-tmp/<slug>/dev-browser/`), and
+  keep private reusable tools in `~/dev-browser-private/scripts/`.
 - `tmp/` - Directory for temporary automation scripts
 
 ### Path Aliases

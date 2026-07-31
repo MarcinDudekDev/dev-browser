@@ -63,8 +63,34 @@ if [[ -z "$SERVER_PORT" ]]; then
     set_mode_vars "dev"
 fi
 SCREENSHOTS_DIR="${SCREENSHOTS_DIR:-$DEV_BROWSER_HOME/screenshots}"
-BUILTIN_SCRIPTS_DIR="$DEV_BROWSER_DIR/scripts"
+# Published command surface. Named builtins/ (not scripts/) because for years this
+# dir held three unrelated things under one name — published backends, per-client
+# scratch, and private tools — and a blanket gitignore over scripts/*.ts silently
+# swallowed real backends along with the scratch it was meant to hide.
+BUILTIN_SCRIPTS_DIR="$DEV_BROWSER_DIR/builtins"
+# Private reusable tools, versioned in their own private repo, never published here.
+DEV_BROWSER_PRIVATE="${DEV_BROWSER_PRIVATE:-$HOME/dev-browser-private}"
+PRIVATE_SCRIPTS_DIR="$DEV_BROWSER_PRIVATE/scripts"
 USER_SCRIPTS_DIR="${USER_SCRIPTS_DIR:-$DEV_BROWSER_HOME/scripts}"
+
+# Translate a legacy .../skills/dev-browser/scripts/foo.ts argument to builtins/.
+# A read-only string rewrite: it deliberately does NOT create a scripts/ directory,
+# because any writable path named scripts/ re-invites the collision above.
+remap_legacy_scripts_path() {
+    local p=$1
+    case "$p" in
+        "$DEV_BROWSER_DIR"/scripts/*)
+            local rest=${p#"$DEV_BROWSER_DIR"/scripts/}
+            local cand="$DEV_BROWSER_DIR/builtins/$rest"
+            if [[ -e "$cand" ]]; then
+                echo "WARNING: deprecated path scripts/$rest -> builtins/$rest" >&2
+                printf '%s\n' "$cand"
+                return 0
+            fi
+            ;;
+    esac
+    printf '%s\n' "$p"
+}
 # Scratch scripts (throwaway per-project .ts) live under the global temp root,
 # NEVER inside the skill dir or ~/.claude — see get_scratch_dir() below.
 CLAUDE_TMP_ROOT="${CLAUDE_TMP_ROOT:-$HOME/claude-tmp}"

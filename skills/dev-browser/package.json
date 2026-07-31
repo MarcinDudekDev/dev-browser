@@ -7,7 +7,7 @@
   },
   "scripts": {
     "postinstall": "bash postinstall.sh",
-    "start-server": "npx tsx scripts/start-server.ts",
+    "start-server": "npx tsx builtins/start-server.ts",
     "dev": "npx tsx --watch src/index.ts",
     "test": "node --import tsx --test 'src/**/*.test.ts'",
     "test:watch": "node --import tsx --test --watch 'src/**/*.test.ts'"

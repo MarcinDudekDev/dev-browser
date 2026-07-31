@@ -9,11 +9,16 @@ cmd_run() {
     local scratch_dir
     scratch_dir="$(get_scratch_dir)"
 
+    # An argument naming the pre-rename scripts/ dir still resolves, with a warning.
+    script_name="$(remap_legacy_scripts_path "$script_name")"
+
     local script_file=""
     if [[ -f "$script_name" ]]; then
         script_file="$script_name"
     elif [[ -f "$BUILTIN_SCRIPTS_DIR/${script_name}.ts" ]]; then
         script_file="$BUILTIN_SCRIPTS_DIR/${script_name}.ts"
+    elif [[ -f "$PRIVATE_SCRIPTS_DIR/${script_name}.ts" ]]; then
+        script_file="$PRIVATE_SCRIPTS_DIR/${script_name}.ts"
     elif [[ -f "$scratch_dir/${script_name}.ts" ]]; then
         script_file="$scratch_dir/${script_name}.ts"
     elif [[ -f "$USER_SCRIPTS_DIR/${script_name}.ts" ]]; then
@@ -25,10 +30,11 @@ cmd_run() {
         echo "Script not found: $script_name" >&2
         echo "Searched:" >&2
         echo "  $BUILTIN_SCRIPTS_DIR/${script_name}.ts" >&2
+        echo "  $PRIVATE_SCRIPTS_DIR/${script_name}.ts  (private)" >&2
         echo "  $scratch_dir/${script_name}.ts" >&2
         echo "  $USER_SCRIPTS_DIR/${script_name}.ts  (legacy)" >&2
         echo "" >&2
-        echo "Built-in scripts:" >&2
+        echo "Builtins:" >&2
         ls -1 "$BUILTIN_SCRIPTS_DIR"/*.ts 2>/dev/null | xargs -I{} basename {} .ts | sed 's/^/  /'
         echo "" >&2
         echo "Scratch scripts (use --list for full list):" >&2
@@ -41,7 +47,7 @@ cmd_run() {
 }
 
 cmd_list() {
-    echo "=== Built-in scripts ($BUILTIN_SCRIPTS_DIR) ==="
+    echo "=== Builtins ($BUILTIN_SCRIPTS_DIR) ==="
     ls -1 "$BUILTIN_SCRIPTS_DIR"/*.ts 2>/dev/null | while read f; do
         [[ "$(basename "$f")" == "start-server.ts" ]] && continue
         local name=$(basename "$f" .ts)

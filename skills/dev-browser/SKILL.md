@@ -115,6 +115,18 @@ dev-browser.sh --scratch-dir             # Print dir to save your scripts in
 scripts into the skill directory or anywhere under `~/.claude` — that pollutes
 the skill repo and violates the global temp-file rule.
 
+Three homes, deliberately kept apart:
+
+| What | Where | Versioned in |
+|------|-------|--------------|
+| Published command backends ("builtins") | `builtins/` in this skill | this repo |
+| Throwaway per-task scripts ("scratch") | `$(dev-browser.sh --scratch-dir)` | nothing, by design |
+| Private reusable tools | `~/dev-browser-private/scripts/` | a private repo |
+
+`--run <name>` searches all three, in that order. `builtins/` was called `scripts/`
+until 2026-07-31; passing an old `.../scripts/foo.ts` path to the wrapper still
+works but warns.
+
 Auto-injected globals (no imports needed):
 - `page`, `client` — Playwright page and client
 - `resolveField(page, target)` — ARIA-first field resolution

@@ -379,7 +379,7 @@ case "$1" in
 
     # Brave setup helper
     --setup-brave)
-        "$DEV_BROWSER_DIR/scripts/setup-brave-debug.sh"
+        "$BUILTIN_SCRIPTS_DIR/setup-brave-debug.sh"
         exit $?
         ;;
 

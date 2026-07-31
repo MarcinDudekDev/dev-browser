@@ -70,8 +70,12 @@ run_script() {
         SCRIPT=$(cat)
     fi
 
-    # Strip boilerplate for backward compatibility with user scripts (not builtins)
-    if [[ -n "$script_file" && "$script_file" != *"/scripts/"* ]]; then
+    # Strip boilerplate for backward compatibility with user scripts (not builtins).
+    # Builtins and private tools are written against the auto-injected client/page,
+    # so they must be passed through untouched.
+    if [[ -n "$script_file" \
+          && "$script_file" != "$BUILTIN_SCRIPTS_DIR"/* \
+          && "$script_file" != "$PRIVATE_SCRIPTS_DIR"/* ]]; then
         SCRIPT=$(echo "$SCRIPT" | sed -E \
             -e '/^[[:space:]]*(const|let|var)[[:space:]]+client[[:space:]]*=[[:space:]]*await[[:space:]]+connect\(\)/d' \
             -e '/^[[:space:]]*(const|let|var)[[:space:]]+page[[:space:]]*=[[:space:]]*await[[:space:]]+client\.page\(/d' \

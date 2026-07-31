@@ -228,7 +228,7 @@ const page = await client.page("test-session");
 
 // Login to WordPress
 const loginSuccess = await login(page, {
-  url: 'https://fiverr.loc/wp-login.php',
+  url: 'https://example.com/wp-login.php',
   user: 'admin',
   pass: 'Admin123',
   waitFor: '.admin-bar'
@@ -240,7 +240,7 @@ if (!loginSuccess) {
 }
 
 // Navigate to settings page
-await page.goto('https://fiverr.loc/wp-admin/admin.php?page=settings');
+await page.goto('https://example.com/wp-admin/admin.php?page=settings');
 
 // Test modal interaction
 await modal(page, {
@@ -262,7 +262,7 @@ await fillAndSubmit(page, {
 
 // Test responsive design
 await responsive(page, {
-  url: 'https://fiverr.loc',
+  url: 'https://example.com',
   screenshots: '/tmp/homepage'
 });
 
@@ -281,7 +281,7 @@ import { login } from '../src/patterns';
 
 export default async function(page: Page) {
   return await login(page, {
-    url: process.env.WP_URL || 'https://fiverr.loc/wp-login.php',
+    url: process.env.WP_URL || 'https://example.com/wp-login.php',
     user: process.env.WP_USER || 'admin',
     pass: process.env.WP_PASS || 'Admin123',
     waitFor: '.admin-bar'

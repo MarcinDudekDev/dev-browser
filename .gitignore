@@ -84,3 +84,6 @@ skills/dev-browser/scripts/*/
 skills/dev-browser/mg-*.mjs
 skills/dev-browser/*.bak2
 skills/dev-browser/375/
+
+# Session handoff file — local only, never committed
+.claude-handoff.md

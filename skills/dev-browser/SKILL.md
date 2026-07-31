@@ -107,7 +107,13 @@ dev-browser.sh --chain "cmd|cmd|cmd"     # Chain commands
 dev-browser.sh --list                    # List available scripts
 dev-browser.sh --scenario <name>         # Run YAML scenario
 dev-browser.sh --scenarios               # List available scenarios
+dev-browser.sh --scratch-dir             # Print dir to save your scripts in
 ```
+
+**Where to save scripts:** always `$(dev-browser.sh --scratch-dir)`, i.e.
+`~/claude-tmp/<project-slug>/dev-browser/`. It is created for you. NEVER write
+scripts into the skill directory or anywhere under `~/.claude` — that pollutes
+the skill repo and violates the global temp-file rule.
 
 Auto-injected globals (no imports needed):
 - `page`, `client` — Playwright page and client
@@ -115,7 +121,7 @@ Auto-injected globals (no imports needed):
 - `smartFill(resolved, value)` — Auto-detects input type
 - `waitForPageLoad`, `waitForElement`, `waitForElementGone`, `waitForCondition`, `waitForURL`, `waitForNetworkIdle`
 
-Script template (`$DEV_BROWSER_HOME/scripts/myproject/test.ts`):
+Script template (`~/claude-tmp/<project-slug>/dev-browser/test.ts`):
 ```typescript
 // client and page are AUTO-INJECTED - do NOT add connect()/page() boilerplate!
 await page.goto("https://example.com");

@@ -127,6 +127,16 @@ Three homes, deliberately kept apart:
 until 2026-07-31; passing an old `.../scripts/foo.ts` path to the wrapper still
 works but warns.
 
+**Arguments do NOT arrive as `process.argv`.** `--run <name> a b c` exports them as the
+`SCRIPT_ARGS` env var and runs the file with no extra argv, so an argv-based flag check
+silently reads as absent - a `--apply` guard stays in dry-run mode and reports success.
+Read `process.env.SCRIPT_ARGS` instead:
+
+```typescript
+const args = (process.env.SCRIPT_ARGS ?? "").split(/\s+/).filter(Boolean);
+const apply = args.includes("--apply");
+```
+
 Auto-injected globals (no imports needed):
 - `page`, `client` — Playwright page and client
 - `resolveField(page, target)` — ARIA-first field resolution

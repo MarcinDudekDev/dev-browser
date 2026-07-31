@@ -83,7 +83,13 @@ remap_legacy_scripts_path() {
             local rest=${p#"$DEV_BROWSER_DIR"/scripts/}
             local cand="$DEV_BROWSER_DIR/builtins/$rest"
             if [[ -e "$cand" ]]; then
+                # Print the FULL new path: the caller usually wants to paste it into a
+                # file read, and only the wrapper does this remapping. A path that keeps
+                # working here while failing every direct read is worse than a clean
+                # break unless the replacement is spelled out.
                 echo "WARNING: deprecated path scripts/$rest -> builtins/$rest" >&2
+                echo "         only dev-browser.sh remaps this; to read the file use:" >&2
+                echo "         $cand" >&2
                 printf '%s\n' "$cand"
                 return 0
             fi

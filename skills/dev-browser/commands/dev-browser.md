@@ -43,7 +43,9 @@ dev-browser.sh --stop               # Stop current mode
 ```
 
 ## TypeScript Scripts
-Save to `$DEV_BROWSER_HOME/scripts/{project}/script.ts`:
+Save to `$(dev-browser.sh --scratch-dir)/script.ts` — i.e.
+`~/claude-tmp/{project-slug}/dev-browser/script.ts`. Never save scripts into the
+skill directory or under `~/.claude`.
 ```typescript
 // client and page are AUTO-INJECTED
 await page.goto("https://example.com");
@@ -51,7 +53,7 @@ await waitForPageLoad(page);
 console.log(await page.title());
 ```
 
-Run with: `dev-browser.sh --run {project}/script`
+Run with: `dev-browser.sh --run script` (or pass the absolute path).
 
 ---
 

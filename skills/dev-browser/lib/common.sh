@@ -65,6 +65,9 @@ fi
 SCREENSHOTS_DIR="${SCREENSHOTS_DIR:-$DEV_BROWSER_HOME/screenshots}"
 BUILTIN_SCRIPTS_DIR="$DEV_BROWSER_DIR/scripts"
 USER_SCRIPTS_DIR="${USER_SCRIPTS_DIR:-$DEV_BROWSER_HOME/scripts}"
+# Scratch scripts (throwaway per-project .ts) live under the global temp root,
+# NEVER inside the skill dir or ~/.claude — see get_scratch_dir() below.
+CLAUDE_TMP_ROOT="${CLAUDE_TMP_ROOT:-$HOME/claude-tmp}"
 VISUAL_DIFF="${VISUAL_DIFF:-$DEV_BROWSER_HOME/visual-diff}"
 
 # TypeScript runner: bun for file scripts (140ms), tsx for heredocs (660ms).
@@ -189,6 +192,23 @@ if found:
 
     _cached_project_prefix="$result"
     printf '%s' "$result"
+}
+
+# Canonical scratch dir for throwaway per-project scripts:
+#   ~/claude-tmp/<project-slug>/dev-browser/
+# Falls back to ~/claude-tmp/dev-browser-scratch/ when the slug can't be
+# resolved. Created on demand. Never write scratch into the skill directory.
+get_scratch_dir() {
+    local prefix
+    prefix=$(get_project_prefix)
+    local dir
+    if [[ -z "$prefix" || "$prefix" == "." || "$prefix" == "/" ]]; then
+        dir="$CLAUDE_TMP_ROOT/dev-browser-scratch"
+    else
+        dir="$CLAUDE_TMP_ROOT/$prefix/dev-browser"
+    fi
+    mkdir -p "$dir" 2>/dev/null
+    printf '%s' "$dir"
 }
 
 # Resolve page name: accepts a page name, prefixed name, or URL.

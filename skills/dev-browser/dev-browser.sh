@@ -74,6 +74,12 @@ SCRIPTS
     --list                    List available scripts
     --scenario <name>         Run YAML scenario
     --scenarios               List available scenarios
+    --scratch-dir             Print (and create) the dir to save scripts in
+
+    Save throwaway scripts to "$(dev-browser.sh --scratch-dir)" — that is
+    ~/claude-tmp/<project-slug>/dev-browser/. NEVER write them into the skill
+    directory or anywhere under ~/.claude. Run with --run <name> (basename
+    without .ts) or --run <absolute-path>.
 
     Auto-injected globals (no imports needed):
       page, client, resolveField, smartFill
@@ -320,6 +326,13 @@ case "$1" in
             --annotate) cmd_annotate "$2" "$3"; exit $? ;;
             --watch-design) cmd_watch_design "$2" "$3" "$4"; exit $? ;;
         esac
+        ;;
+
+    # Print (and create) the canonical scratch dir for throwaway .ts scripts
+    --scratch-dir)
+        get_scratch_dir
+        echo
+        exit 0
         ;;
 
     # Script commands

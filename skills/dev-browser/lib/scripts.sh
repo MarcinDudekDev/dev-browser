@@ -6,9 +6,16 @@ cmd_run() {
     shift
     log_debug "--run '$script_name' from $(pwd)"
 
+    local scratch_dir
+    scratch_dir="$(get_scratch_dir)"
+
     local script_file=""
-    if [[ -f "$BUILTIN_SCRIPTS_DIR/${script_name}.ts" ]]; then
+    if [[ -f "$script_name" ]]; then
+        script_file="$script_name"
+    elif [[ -f "$BUILTIN_SCRIPTS_DIR/${script_name}.ts" ]]; then
         script_file="$BUILTIN_SCRIPTS_DIR/${script_name}.ts"
+    elif [[ -f "$scratch_dir/${script_name}.ts" ]]; then
+        script_file="$scratch_dir/${script_name}.ts"
     elif [[ -f "$USER_SCRIPTS_DIR/${script_name}.ts" ]]; then
         script_file="$USER_SCRIPTS_DIR/${script_name}.ts"
     fi
@@ -18,13 +25,14 @@ cmd_run() {
         echo "Script not found: $script_name" >&2
         echo "Searched:" >&2
         echo "  $BUILTIN_SCRIPTS_DIR/${script_name}.ts" >&2
-        echo "  $USER_SCRIPTS_DIR/${script_name}.ts" >&2
+        echo "  $scratch_dir/${script_name}.ts" >&2
+        echo "  $USER_SCRIPTS_DIR/${script_name}.ts  (legacy)" >&2
         echo "" >&2
         echo "Built-in scripts:" >&2
         ls -1 "$BUILTIN_SCRIPTS_DIR"/*.ts 2>/dev/null | xargs -I{} basename {} .ts | sed 's/^/  /'
         echo "" >&2
-        echo "User scripts (use --list for full list):" >&2
-        find "$USER_SCRIPTS_DIR" -maxdepth 2 -name "*.ts" 2>/dev/null | head -10 | sed "s|$USER_SCRIPTS_DIR/||" | sed 's/^/  /'
+        echo "Scratch scripts (use --list for full list):" >&2
+        find "$scratch_dir" -maxdepth 2 -name "*.ts" 2>/dev/null | head -10 | sed "s|$scratch_dir/||" | sed 's/^/  /'
         return 1
     fi
 
@@ -42,9 +50,11 @@ cmd_list() {
         printf "  %-20s %s\n" "$name" "$desc"
     done
     echo ""
-    echo "=== User scripts ($USER_SCRIPTS_DIR) ==="
-    find "$USER_SCRIPTS_DIR" -maxdepth 2 -name "*.ts" 2>/dev/null | sort | while read f; do
-        local name=$(echo "$f" | sed "s|$USER_SCRIPTS_DIR/||" | sed 's/\.ts$//')
+    local scratch_dir
+    scratch_dir="$(get_scratch_dir)"
+    echo "=== Scratch scripts ($scratch_dir) ==="
+    find "$scratch_dir" -maxdepth 2 -name "*.ts" 2>/dev/null | sort | while read f; do
+        local name=$(echo "$f" | sed "s|$scratch_dir/||" | sed 's/\.ts$//')
         local desc=$(head -1 "$f" | sed -n 's|^// *||p')
         [[ -z "$desc" ]] && desc=""
         printf "  %-30s %s\n" "$name" "$desc"

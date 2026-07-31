@@ -88,9 +88,20 @@ cmd_screenshot() {
 }
 
 cmd_responsive() {
-    local page_name="${1:-main}"
+    # A flag that slipped past the dispatcher must never become the page name or
+    # the output dir — "--responsive main --url ..." used to mkdir a literal
+    # "--url" directory next to the server's cwd. Warn and fall back instead.
+    local page_arg="$1" dir_arg="$2"
+    for _a in page_arg dir_arg; do
+        if [[ "${!_a}" == --* ]]; then
+            echo "WARNING: Unknown flag '${!_a}' ignored (--responsive takes [page] [output-dir])" >&2
+            printf -v "$_a" '%s' ""
+        fi
+    done
+
+    local page_name="${page_arg:-main}"
     get_project_paths
-    local output_dir="${2:-$PROJECT_SCREENSHOTS_DIR}"
+    local output_dir="${dir_arg:-$PROJECT_SCREENSHOTS_DIR}"
     start_server || return 1
     local PREFIX=$(get_project_prefix)
     mkdir -p "$output_dir"

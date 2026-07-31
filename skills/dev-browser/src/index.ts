@@ -1,8 +1,8 @@
-import express, { type Express, type Request, type Response } from "express";
+import express, { type Express, type Request, type Response, type NextFunction } from "express";
 import { chromium, type BrowserContext, type Page } from "playwright";
 import { mkdirSync, existsSync, readFileSync, writeFileSync, rmSync } from "fs";
 import { execFile } from "child_process";
-import { join } from "path";
+import { join, isAbsolute, resolve } from "path";
 import type { Socket } from "net";
 import type {
   ServeOptions,
@@ -85,10 +85,27 @@ const DEFAULT_RETRY_DELAY = 500;
 // from whatever the human is typing into. Measured on macOS: reusing an existing
 // page steals nothing, creating a tab makes "Google Chrome for Testing"
 // frontmost. Nothing in this codebase calls bringToFront() — Chromium does it on
-// its own, and there is no flag to disable it. So we note who was frontmost
-// before creating a tab and hand focus straight back afterwards.
-// Best-effort by design: never blocks or fails page creation.
+// its own, and there is no flag to disable it.
+//
+// A SINGLE restore right after newPage() is not enough, and the first cut of this
+// fix shipped exactly that. Measured with a high-frequency frontmost sampler:
+// Chromium raises its window a beat AFTER newPage() resolves, so one restore fires
+// too early, loses the race, and the browser sits frontmost for ~100ms — long
+// enough to swallow a keystroke or flash the window. So we REASSERT: for a short
+// window after create, whenever the automation browser is frontmost, hand focus
+// back to whoever had it, until it stays put.
+//
+// We only ever reclaim FROM the automation browser (matched by name), never from
+// an app the human deliberately switched to mid-window. Best-effort throughout:
+// never blocks or fails page creation, tolerates missing automation permission.
 const isMac = process.platform === "darwin";
+
+// The macOS process name of our own headful automation browser — the only app we
+// steal focus back from. Playwright's bundled Chromium reports "Google Chrome for
+// Testing"; a system Chromium channel reports "Chromium".
+const AUTOMATION_APP_RE = /Chrome for Testing|Chromium/i;
+const FOCUS_REASSERT_WINDOW_MS = 800;
+const FOCUS_REASSERT_POLL_MS = 80;
 
 async function frontmostApp(): Promise<string | undefined> {
   if (!isMac) return undefined;
@@ -103,12 +120,34 @@ async function frontmostApp(): Promise<string | undefined> {
   });
 }
 
-function restoreFocus(appName: string | undefined): void {
-  // Chromium legitimately being frontmost before is a no-op worth skipping.
-  if (!isMac || !appName || appName.startsWith("Google Chrome")) return;
-  execFile("osascript", ["-e", `tell application "${appName.replace(/"/g, "")}" to activate`], (): void => {
-    // best-effort: the app may have quit, or lack automation permission
+function activateApp(appName: string): Promise<void> {
+  return new Promise<void>((resolve): void => {
+    execFile("osascript", ["-e", `tell application "${appName.replace(/"/g, "")}" to activate`], (): void => {
+      // best-effort: the app may have quit, or lack automation permission
+      resolve();
+    });
   });
+}
+
+// Fire-and-forget from the caller (do not await — it must not delay the API
+// response). Reasserts focus for up to FOCUS_REASSERT_WINDOW_MS, giving up once
+// the target has stayed frontmost across two consecutive polls.
+async function restoreFocus(appName: string | undefined): Promise<void> {
+  // If the human was already in the automation browser, there is nothing to
+  // restore — leave them there.
+  if (!isMac || !appName || AUTOMATION_APP_RE.test(appName)) return;
+  const deadline = Date.now() + FOCUS_REASSERT_WINDOW_MS;
+  let stableChecks = 0;
+  while (Date.now() < deadline) {
+    const now = await frontmostApp();
+    if (now !== undefined && AUTOMATION_APP_RE.test(now)) {
+      await activateApp(appName);  // the browser grabbed focus — take it back
+      stableChecks = 0;
+    } else if (++stableChecks >= 2) {
+      return;  // frontmost is no longer the browser, twice running — settled
+    }
+    await new Promise<void>((resolve: () => void): void => { setTimeout(resolve, FOCUS_REASSERT_POLL_MS); });
+  }
 }
 
 // Helper to retry fetch with exponential backoff
@@ -411,10 +450,25 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
   interface PageEntry {
     page: Page;
     targetId: string;
+    /** ms epoch when the page was registered. */
+    createdAt: number;
+    /** ms epoch of the last request that touched this page. Drives the stale sweep. */
+    lastUsed: number;
   }
 
   // Registry: name -> PageEntry
   const registry = new Map<string, PageEntry>();
+
+  /**
+   * Mark a page as active. The scheduled tab reaper closes registered pages only
+   * when their owning session is gone AND they have been idle past a threshold,
+   * so an under-reported lastUsed would mean closing a page someone still wants.
+   * Every route that acts on a named page calls this.
+   */
+  function touchPage(name: string): void {
+    const entry = registry.get(name);
+    if (entry) entry.lastUsed = Date.now();
+  }
 
   // Helper to get CDP targetId for a page (with timeout to prevent hangs)
   async function getTargetId(page: Page): Promise<string> {
@@ -434,6 +488,12 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
   // Express server for page management
   const app: Express = express();
   app.use(express.json());
+
+  // Any request under /pages/:name counts as activity on that page.
+  app.use("/pages/:name", (req: Request<{ name: string }>, _res: Response, next: NextFunction): void => {
+    touchPage(req.params.name);
+    next();
+  });
 
   // GET / - server info
   app.get("/", (_req: Request, res: Response): void => {
@@ -457,12 +517,15 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     const response: ListPagesResponse = {
       pages: Array.from(registry.keys()),
     };
-    // Include target IDs for cleanup cross-referencing
+    // Include target IDs for cleanup cross-referencing, and activity timestamps
+    // (ms epoch) so the scheduled reaper can judge which pages are idle.
     const targets: Record<string, string> = {};
+    const activity: Record<string, { createdAt: number; lastUsed: number }> = {};
     for (const [name, entry] of registry.entries()) {
       targets[name] = entry.targetId;
+      activity[name] = { createdAt: entry.createdAt, lastUsed: entry.lastUsed };
     }
-    res.json({ ...response, targets });
+    res.json({ ...response, targets, activity });
   });
 
   // POST /pages - get or create page
@@ -488,6 +551,9 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     // Check if page already exists and is still alive
     let entry = registry.get(name);
     if (entry) {
+      // Reusing a page is activity: POST /pages is how every command reattaches,
+      // so without this a busy session would still look idle to the stale sweep.
+      touchPage(name);
       try {
         // Verify the page is still open — use isClosed() first (no network call),
         // then evaluate only if needed. This avoids false positives during navigation.
@@ -542,13 +608,16 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
       const focusedBefore = headless ? undefined : await frontmostApp();
       // Create new page in the persistent context (with timeout to prevent hangs)
       const page = await withTimeout(context.newPage(), TIMEOUTS.LONG, "Page creation timed out after 30s");
-      restoreFocus(focusedBefore);
+      // Fire-and-forget: reasserts focus in the background over the next ~800ms so
+      // Chromium's late window-raise can't keep the human's focus (see restoreFocus).
+      void restoreFocus(focusedBefore);
 
       // Register early to protect from cleanup_orphaned_tabs race:
       // the cleanup checks registry before closing any tab, so we must
       // register before doing any async work (stealth injection, etc.)
       const targetId = await getTargetId(page);
-      entry = { page, targetId };
+      const now = Date.now();
+      entry = { page, targetId, createdAt: now, lastUsed: now };
       registry.set(name, entry);
 
       // Clean up registry when page is closed (e.g., user clicks X)
@@ -593,6 +662,26 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     res.status(HTTP.NOT_FOUND).json({ error: "page not found" });
   });
 
+  // Screenshot paths arrive from shell callers, so they arrive broken in two
+  // ways that both used to litter the server's cwd (the skill repo) with junk
+  // directories, because Playwright happily mkdir -p's any relative path:
+  //   - a misparsed flag becomes the path       -> ./--url/<shot>.png
+  //   - a single-quoted var is never expanded   -> ./${process.env.HOME}/...
+  // Reject both loudly, and anchor any other relative path under the canonical
+  // screenshots dir instead of process.cwd().
+  function resolveScreenshotPath(savePath: string): string {
+    if (/\$\{|\$\(/.test(savePath)) {
+      throw new Error(`Unexpanded variable in screenshot path: "${savePath}" — use double quotes in the shell, or pass an absolute path`);
+    }
+    if (savePath.startsWith("-")) {
+      throw new Error(`Screenshot path looks like a flag, not a path: "${savePath}"`);
+    }
+    if (isAbsolute(savePath)) return savePath;
+    const screenshotsRoot = process.env.SCREENSHOTS_DIR
+      || join(process.env.DEV_BROWSER_HOME || join(process.env.HOME || "/tmp", ".dev-browser"), "screenshots");
+    return resolve(screenshotsRoot, savePath);
+  }
+
   // POST /pages/:name/screenshot - take screenshot using server's Page object
   // This avoids stale CDP reconnection issues
   app.post("/pages/:name/screenshot", async (req: Request<{ name: string }>, res: Response): Promise<void> => {
@@ -606,7 +695,7 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
 
     try {
       const { path: savePath, fullPage, selector } = req.body as { path?: string; fullPage?: boolean; selector?: string };
-      const screenshotPath = savePath || `/tmp/screenshot-${Date.now()}.png`;
+      const screenshotPath = savePath ? resolveScreenshotPath(savePath) : `/tmp/screenshot-${Date.now()}.png`;
       if (selector) {
         // Element-level screenshot: scroll into view + clip to element bounds
         const locator = entry.page.locator(selector).first();

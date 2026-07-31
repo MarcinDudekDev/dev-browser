@@ -25,8 +25,17 @@ cmd_crashes() {
 
 cmd_tabs() {
     # Find running server by checking all mode ports
+    # An explicitly requested mode wins over the scan order, so `--stealth --tabs`
+    # reports stealth even when a dev server is also up (same fix as cmd_cleanup).
     local _cdp="" _http=""
+    if [[ -n "$BROWSER_MODE" ]]; then
+        local _want=($(get_mode_ports "$BROWSER_MODE"))
+        if curl -s --connect-timeout 1 "http://localhost:${_want[0]}/health" 2>/dev/null | grep -q ok; then
+            _http="${_want[0]}"; _cdp="${_want[1]}"
+        fi
+    fi
     for _mode in dev stealth user; do
+        [[ -n "$_cdp" ]] && break
         local _ports=($(get_mode_ports "$_mode"))
         if curl -s --connect-timeout 1 "http://localhost:${_ports[0]}/health" 2>/dev/null | grep -q ok; then
             _http="${_ports[0]}"; _cdp="${_ports[1]}"; break
@@ -81,9 +90,18 @@ cmd_cleanup() {
         echo "Cleaning up pages for project '$project_prefix' only" >&2
     fi
 
-    # Find running server
+    # Find running server. An explicitly requested mode (--stealth/--user flag or
+    # exported BROWSER_MODE) wins over the scan order, so `--stealth --cleanup`
+    # reaps stealth even when a dev server is also up.
     local _found_mode=""
+    if [[ -n "$BROWSER_MODE" ]]; then
+        local _want=($(get_mode_ports "$BROWSER_MODE"))
+        if curl -s --connect-timeout 1 "http://localhost:${_want[0]}/health" 2>/dev/null | grep -q ok; then
+            SERVER_PORT="${_want[0]}"; CDP_PORT="${_want[1]}"; _found_mode="$BROWSER_MODE"
+        fi
+    fi
     for _mode in dev stealth user; do
+        [[ -n "$_found_mode" ]] && break
         local _ports=($(get_mode_ports "$_mode"))
         if curl -s --connect-timeout 1 "http://localhost:${_ports[0]}/health" 2>/dev/null | grep -q ok; then
             SERVER_PORT="${_ports[0]}"; CDP_PORT="${_ports[1]}"; _found_mode="$_mode"; break
@@ -137,8 +155,12 @@ print()
 to_close = []
 
 if mode == 'blank':
-    to_close = [t for t in tabs if t.get('url','').startswith('about:blank')]
-    print(f'Mode: close about:blank tabs ({len(to_close)} found)')
+    # Registered pages are protected even when parked on about:blank — a page
+    # created but not yet navigated is a live session's page, not an orphan.
+    to_close = [t for t in tabs
+                if t.get('url','').startswith('about:blank')
+                and t.get('id','') not in registered_targets]
+    print(f'Mode: close orphaned about:blank tabs ({len(to_close)} found)')
 
 elif mode == '--all' or mode == '--unregistered':
     # Close tabs whose CDP target ID is NOT in the registry

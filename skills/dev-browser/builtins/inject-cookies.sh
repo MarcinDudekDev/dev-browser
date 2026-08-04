@@ -18,8 +18,15 @@ if [[ -z "$domain" ]]; then
     exit 1
 fi
 
-# 1. Fetch cookies from Cookie Bridge
-cb_result=$(curl -s -m 10 "http://127.0.0.1:${cb_port}/cookies?domain=${domain}&agent_id=dev-browser")
+# 1. Fetch cookies from Cookie Bridge (token-gated; token is local 0600 file)
+CB_TOKEN_FILE="${HOME}/.cookie-bridge/token"
+if [[ ! -f "$CB_TOKEN_FILE" ]]; then
+    echo "Cookie Bridge token missing at $CB_TOKEN_FILE — is the proxy running?" >&2
+    exit 1
+fi
+CB_TOKEN="$(tr -d '[:space:]' < "$CB_TOKEN_FILE")"
+cb_result=$(curl -s -m 10 -H "X-CB-Token: ${CB_TOKEN}" \
+    "http://127.0.0.1:${cb_port}/cookies?domain=${domain}&agent_id=dev-browser")
 cb_error=$(echo "$cb_result" | jq -r '.error // empty' 2>/dev/null)
 if [[ -n "$cb_error" ]]; then
     echo "Cookie Bridge error: $cb_error" >&2

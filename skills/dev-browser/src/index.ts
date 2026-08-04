@@ -826,11 +826,13 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
         if (cookieData.httpOnly !== undefined) cookie.httpOnly = Boolean(cookieData.httpOnly);
         if (cookieData.secure !== undefined) cookie.secure = Boolean(cookieData.secure);
         if (cookieData.sameSite) {
-          // Chrome uses lowercase, Playwright uses capitalized
+          // Chrome reports "no_restriction" for SameSite=None; Playwright wants "None".
+          // Unmapped no_restriction falls through to Playwright's default Lax and breaks
+          // exactly the cross-site OAuth cookies Cookie Bridge exists to carry.
           const sameSite = String(cookieData.sameSite).toLowerCase();
           if (sameSite === "strict") cookie.sameSite = "Strict";
           else if (sameSite === "lax") cookie.sameSite = "Lax";
-          else if (sameSite === "none") cookie.sameSite = "None";
+          else if (sameSite === "none" || sameSite === "no_restriction") cookie.sameSite = "None";
         }
         return cookie;
       });

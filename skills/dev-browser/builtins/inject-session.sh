@@ -38,8 +38,15 @@ if [[ -z "$current_url" || "$current_url" == "about:blank" ]]; then
     exit 1
 fi
 
-# --- 1. Fetch all session data from Cookie Bridge ---
-cb_result=$(curl -s -m 10 "${CB}/cookies?domain=${domain}&agent_id=dev-browser")
+# --- 1. Fetch all session data from Cookie Bridge (token-gated) ---
+CB_TOKEN_FILE="${HOME}/.cookie-bridge/token"
+if [[ ! -f "$CB_TOKEN_FILE" ]]; then
+    echo "Cookie Bridge token missing at $CB_TOKEN_FILE — is the proxy running?" >&2
+    exit 1
+fi
+CB_TOKEN="$(tr -d '[:space:]' < "$CB_TOKEN_FILE")"
+cb_result=$(curl -s -m 10 -H "X-CB-Token: ${CB_TOKEN}" \
+    "${CB}/cookies?domain=${domain}&agent_id=dev-browser")
 cb_error=$(echo "$cb_result" | jq -r '.error // empty' 2>/dev/null)
 if [[ -n "$cb_error" ]]; then
     echo "Cookie Bridge error: $cb_error" >&2
@@ -49,7 +56,8 @@ fi
 cookie_count=$(echo "$cb_result" | jq -r '.count // 0' 2>/dev/null)
 cookies_json=$(echo "$cb_result" | jq -c '.cookies' 2>/dev/null)
 
-storage_result=$(curl -s -m 10 "${CB}/storage?domain=${domain}&agent_id=dev-browser")
+storage_result=$(curl -s -m 10 -H "X-CB-Token: ${CB_TOKEN}" \
+    "${CB}/storage?domain=${domain}&agent_id=dev-browser")
 storage_error=$(echo "$storage_result" | jq -r '.error // empty' 2>/dev/null)
 
 ls_count=0

@@ -10,6 +10,12 @@ tools: [dev-browser.sh]
 
 # Dev Browser (v1.5.0)
 
+**Binary: `~/Tools/dev-browser.sh`, already on PATH — call it as plain
+`dev-browser.sh`, with no path.** It is not stored in this skill directory, and
+looking for it there is the natural reflex that produced an `exit 127`. A symlink
+now exists in the skill dir so that reflex also works, but the pathless form is
+the canonical one.
+
 Browser automation with persistent page state. Run `dev-browser.sh --help` for the quick reference.
 
 ## Rules

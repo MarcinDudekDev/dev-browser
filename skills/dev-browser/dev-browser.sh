@@ -147,9 +147,28 @@ CHEATEOF
 
 # Legacy header kept minimal - see show_help() for full reference
 
-# Resolve script location (follow symlinks)
+# Resolve script location, following the WHOLE symlink chain.
+#
+# This was a single `readlink` for a long time and appeared to work, because
+# there was only ever one hop: ~/Tools/dev-browser.sh -> the real file. Adding a
+# second symlink in the skill directory made the chain two hops
+#   ~/.claude/skills/dev-browser/dev-browser.sh
+#     -> ~/Tools/dev-browser.sh
+#       -> ~/dev-browser/skills/dev-browser/dev-browser.sh
+# and one readlink stopped at the middle link, so SCRIPT_DIR became ~/Tools and
+# LIB_DIR ~/Tools/lib, which does not exist. The failure was quiet in the worst
+# way: --help still printed (it runs before the sourced functions are needed),
+# so the script LOOKED fine while mode handling and the audit log were dead.
+#
+# Loop rather than `readlink -f`: this stays correct on any bash, and a relative
+# link target must be resolved against the directory of the link that held it,
+# not the caller's cwd.
 SOURCE="${BASH_SOURCE[0]}"
-[[ -L "$SOURCE" ]] && SOURCE="$(readlink "$SOURCE")"
+while [[ -L "$SOURCE" ]]; do
+    _link_dir="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+    SOURCE="$(readlink "$SOURCE")"
+    [[ "$SOURCE" != /* ]] && SOURCE="$_link_dir/$SOURCE"
+done
 SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
 DEV_BROWSER_DIR="$SCRIPT_DIR"
 LIB_DIR="$DEV_BROWSER_DIR/lib"

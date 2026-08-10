@@ -18,30 +18,33 @@ if [[ -z "$domain" ]]; then
     exit 1
 fi
 
-# 1. Fetch cookies from Cookie Bridge (token-gated; token is local 0600 file)
-CB_TOKEN_FILE="${HOME}/.cookie-bridge/token"
-if [[ ! -f "$CB_TOKEN_FILE" ]]; then
-    echo "Cookie Bridge token missing at $CB_TOKEN_FILE — is the proxy running?" >&2
+# Shared Cookie Bridge preflight + loud-failure helpers (see lib/cookie-bridge.sh
+# for why a quiet failure here is never acceptable).
+_CB_LIB="${DEV_BROWSER_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/lib/cookie-bridge.sh"
+if [[ ! -f "$_CB_LIB" ]]; then
+    echo "ERROR: missing $_CB_LIB — dev-browser install is incomplete." >&2
     exit 1
 fi
-CB_TOKEN="$(tr -d '[:space:]' < "$CB_TOKEN_FILE")"
-cb_result=$(curl -s -m 10 -H "X-CB-Token: ${CB_TOKEN}" \
-    "http://127.0.0.1:${cb_port}/cookies?domain=${domain}&agent_id=dev-browser")
-cb_error=$(echo "$cb_result" | jq -r '.error // empty' 2>/dev/null)
-if [[ -n "$cb_error" ]]; then
-    echo "Cookie Bridge error: $cb_error" >&2
-    echo "Make sure Cookie Bridge is running and has an approved session for ${domain}" >&2
-    exit 1
-fi
+# shellcheck source=../lib/cookie-bridge.sh
+source "$_CB_LIB"
 
-cookie_count=$(echo "$cb_result" | jq -r '.count // 0' 2>/dev/null)
+# 1. Fetch cookies from Cookie Bridge (token-gated; token is local 0600 file)
+cb_load_token "$domain" "$cb_port"
+
+cb_get "$cb_port" "/cookies?domain=${domain}&agent_id=${CB_AGENT_ID}"
+if [[ "$CB_HTTP_CODE" != "200" ]]; then
+    cb_die_from_response "$domain" "$cb_port" "cookies" "$CB_HTTP_CODE" "$CB_BODY"
+fi
+cb_result="$CB_BODY"
+
+cookie_count=$(printf '%s' "$cb_result" | jq -r '.count // 0' 2>/dev/null)
 if [[ "$cookie_count" == "0" ]]; then
-    echo "No cookies found for ${domain}" >&2
-    exit 1
+    cb_assert_payload "$domain" "$cb_port" 0 0 0
 fi
 
 # 2. Extract just the cookies array and inject into dev-browser
-cookies_json=$(echo "$cb_result" | jq -c '.cookies' 2>/dev/null)
+cookies_json=$(printf '%s' "$cb_result" | jq -c '.cookies // []' 2>/dev/null)
+cb_assert_cookies_alive "$domain" "$cb_port" "$cookies_json"
 
 inject_result=$(curl -s -m 10 -X POST "http://localhost:${PORT}/cookies" \
     -H "Content-Type: application/json" \
@@ -61,3 +64,5 @@ reload_result=$(curl -s -m 10 -X POST "http://localhost:${PORT}/pages/${PAGE_ID}
     -d '{"code":"location.reload()"}')
 
 echo "Page reloaded — check if auth session is active"
+
+cb_warn_if_expiring "$domain" "$cb_port"

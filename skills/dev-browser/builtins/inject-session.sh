@@ -22,8 +22,17 @@ if [[ -z "$domain" ]]; then
     exit 1
 fi
 
-CB="http://127.0.0.1:${cb_port}"
 DB="http://localhost:${PORT}"
+
+# Shared Cookie Bridge preflight + loud-failure helpers. Sourced, not inlined,
+# so inject-cookies.sh cannot drift away from the same diagnostics.
+_CB_LIB="${DEV_BROWSER_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/lib/cookie-bridge.sh"
+if [[ ! -f "$_CB_LIB" ]]; then
+    echo "ERROR: missing $_CB_LIB — dev-browser install is incomplete." >&2
+    exit 1
+fi
+# shellcheck source=../lib/cookie-bridge.sh
+source "$_CB_LIB"
 
 _eval() {
     curl -s -m 30 -X POST "${DB}/pages/${PAGE_ID}/evaluate" \
@@ -35,37 +44,46 @@ _eval() {
 current_url=$(_eval "location.href" | jq -r '.result // empty')
 if [[ -z "$current_url" || "$current_url" == "about:blank" ]]; then
     echo "ERROR: Navigate to https://${domain} first" >&2
+    echo "  e.g. dev-browser.sh --stealth goto https://${domain}" >&2
     exit 1
 fi
 
 # --- 1. Fetch all session data from Cookie Bridge (token-gated) ---
-CB_TOKEN_FILE="${HOME}/.cookie-bridge/token"
-if [[ ! -f "$CB_TOKEN_FILE" ]]; then
-    echo "Cookie Bridge token missing at $CB_TOKEN_FILE — is the proxy running?" >&2
-    exit 1
+# Every non-2xx here is fatal and loud: an injector that continues past a
+# refused session is how #1025 and #367 became multi-week silent stalls.
+cb_load_token "$domain" "$cb_port"
+
+cb_get "$cb_port" "/cookies?domain=${domain}&agent_id=${CB_AGENT_ID}"
+if [[ "$CB_HTTP_CODE" != "200" ]]; then
+    cb_die_from_response "$domain" "$cb_port" "cookies" "$CB_HTTP_CODE" "$CB_BODY"
 fi
-CB_TOKEN="$(tr -d '[:space:]' < "$CB_TOKEN_FILE")"
-cb_result=$(curl -s -m 10 -H "X-CB-Token: ${CB_TOKEN}" \
-    "${CB}/cookies?domain=${domain}&agent_id=dev-browser")
-cb_error=$(echo "$cb_result" | jq -r '.error // empty' 2>/dev/null)
-if [[ -n "$cb_error" ]]; then
-    echo "Cookie Bridge error: $cb_error" >&2
-    exit 1
-fi
+cb_result="$CB_BODY"
+cookie_count=$(printf '%s' "$cb_result" | jq -r '.count // 0' 2>/dev/null)
+cookies_json=$(printf '%s' "$cb_result" | jq -c '.cookies // []' 2>/dev/null)
+cb_assert_cookies_alive "$domain" "$cb_port" "$cookies_json"
 
-cookie_count=$(echo "$cb_result" | jq -r '.count // 0' 2>/dev/null)
-cookies_json=$(echo "$cb_result" | jq -c '.cookies' 2>/dev/null)
-
-storage_result=$(curl -s -m 10 -H "X-CB-Token: ${CB_TOKEN}" \
-    "${CB}/storage?domain=${domain}&agent_id=dev-browser")
-storage_error=$(echo "$storage_result" | jq -r '.error // empty' 2>/dev/null)
-
+# Storage is genuinely optional (cookie-only sites have none), but a storage
+# FAILURE is not the same as a site having no storage — say which one it was.
+cb_get "$cb_port" "/storage?domain=${domain}&agent_id=${CB_AGENT_ID}"
 ls_count=0
 idb_count=0
-if [[ -z "$storage_error" ]]; then
-    ls_count=$(echo "$storage_result" | jq -r '.localStorage_keys // 0' 2>/dev/null)
-    idb_count=$(echo "$storage_result" | jq -r '.indexedDB_databases // 0' 2>/dev/null)
+if [[ "$CB_HTTP_CODE" == "200" ]]; then
+    storage_result="$CB_BODY"
+    ls_count=$(printf '%s' "$storage_result" | jq -r '.localStorage_keys // 0' 2>/dev/null)
+    idb_count=$(printf '%s' "$storage_result" | jq -r '.indexedDB_databases // 0' 2>/dev/null)
+elif [[ "$CB_HTTP_CODE" == "403" || "$CB_HTTP_CODE" == "410" || "$CB_HTTP_CODE" == "000" ]]; then
+    # Cookies came back but storage says no session — the session died between
+    # the two calls, or was never fully captured. Do not half-inject.
+    cb_die_from_response "$domain" "$cb_port" "localStorage/IndexedDB" "$CB_HTTP_CODE" "$CB_BODY"
+else
+    echo "WARNING: Cookie Bridge /storage returned HTTP ${CB_HTTP_CODE} for ${domain}" >&2
+    echo "  Continuing with cookies only — localStorage/IndexedDB auth (Firebase," >&2
+    echo "  Supabase, Auth0) will NOT work on this page." >&2
 fi
+
+# Refuse to report success on an empty payload — the exact silent-success path
+# that let a logged-out browser look authenticated.
+cb_assert_payload "$domain" "$cb_port" "$cookie_count" "$ls_count" "$idb_count"
 
 # --- 2. Inject cookies (Playwright context + document.cookie fallback) ---
 if [[ "$cookie_count" != "0" ]]; then
@@ -193,4 +211,8 @@ fi
 
 # --- 5. Reload ---
 _eval "location.reload()" > /dev/null
-echo "Page reloaded — session injected (cookies:${cookie_count} ls:${ls_count} idb:${idb_count})"
+echo "Page reloaded — session injected for ${domain} (cookies:${cookie_count} ls:${ls_count} idb:${idb_count})"
+
+# A session that dies two minutes into a ten-minute queue fails as "logged out",
+# never as an error. Warn while there is still time to re-approve.
+cb_warn_if_expiring "$domain" "$cb_port"

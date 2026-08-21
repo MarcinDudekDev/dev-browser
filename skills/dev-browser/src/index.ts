@@ -1208,7 +1208,11 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
               const inp = element as HTMLInputElement;
               const name = inp.name || inp.id || inp.placeholder || inp.type;
               if (name && inp.type !== "hidden") {
-                const val = inp.value ? ` ="${inp.value.substring(0, limits.maxValue)}"` : "";
+                // Never echo a password field's actual value — it may be a live
+                // credential that was substituted from credstore and never
+                // appeared in the command itself, only reached this transcript
+                // via this echo (reported 2026-08-21, msg#1608).
+                const val = inp.value ? (inp.type === "password" ? ` ="***"` : ` ="${inp.value.substring(0, limits.maxValue)}"`) : "";
                 fields.push(`${name}[${inp.type || element.tagName.toLowerCase()}]${val}`);
               }
             });
@@ -1253,7 +1257,9 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
             const inp = element as HTMLInputElement;
             const name = inp.name || inp.id || inp.placeholder || inp.type;
             if (name && inp.type !== "hidden") {
-              const val = inp.value ? ` ="${inp.value.substring(0, limits.maxValue)}"` : "";
+              // Never echo a password field's actual value (see the other fill
+              // handler above for why — msg#1608).
+              const val = inp.value ? (inp.type === "password" ? ` ="***"` : ` ="${inp.value.substring(0, limits.maxValue)}"`) : "";
               fields.push(`${name}[${inp.type || element.tagName.toLowerCase()}]${val}`);
             }
           });

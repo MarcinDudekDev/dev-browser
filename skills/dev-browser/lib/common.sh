@@ -102,13 +102,32 @@ remap_legacy_scripts_path() {
 CLAUDE_TMP_ROOT="${CLAUDE_TMP_ROOT:-$HOME/claude-tmp}"
 VISUAL_DIFF="${VISUAL_DIFF:-$DEV_BROWSER_HOME/visual-diff}"
 
-# TypeScript runner: bun for file scripts (140ms), tsx for heredocs (660ms).
-# Playwright's bundled ws doesn't work in Bun (no HTTP upgrade support).
-# Fix: patched utilsBundle.js to use native ws in Bun — see postinstall.sh.
+# TypeScript runner. Everything here runs on tsx today.
+#
+# BUN STATUS — read this before "fixing" the TODO that used to be here.
+# The old comment said "switch back to bun once oven-sh/bun#9911 merges
+# (PR #27859)". That is misleading now: #27859 is CLOSED and will never merge,
+# so anyone checking it concludes the idea is dead. The opposite is true.
+#
+#   oven-sh/bun#9911   Playwright connectOverCDP() broken under Bun.
+#                      Opened 2024-04-04, CLOSED 2026-08-07 — fixed.
+#   oven-sh/bun#27859  Our fix for the missing 'upgrade' event on 101
+#                      responses. Closed 2026-07-31 WITHOUT merge, superseded,
+#                      not rejected.
+#   oven-sh/bun#31587  What actually fixed it: node:http client rewritten on
+#                      net/tls + llhttp. Merged 2026-06-17.
+#
+# So the blocker is gone upstream. Verified empirically on 2026-08-24 against a
+# real dev-browser CDP endpoint, with postinstall.sh's Playwright patch REMOVED
+# so Bun stood on its own:
+#   bun 1.3.5  -> FAILS, hangs at "<ws connecting>" (predates the fix)
+#   bun 1.4.0  -> PASSES unaided; fix commit c4a937c is an ancestor of v1.4.0
+# Measured on a Playwright-importing script: tsx ~423ms, bun 1.4.0 ~196ms.
+#
+# What is still missing is only a new enough bun on the machine — 1.3.5 is what
+# is installed and it predates the fix. Switching run_ts() to bun is a decision
+# nobody has taken yet, not a blocked one.
 run_ts() {
-    # TODO: switch back to bun once oven-sh/bun#9911 merges (PR #27859)
-    # Bun is ~2x faster but lacks ws 'upgrade' event, breaking Playwright CDP.
-    # All scripts that go through run_script() use Playwright, so tsx is required.
     ./node_modules/.bin/tsx "$@"
 }
 

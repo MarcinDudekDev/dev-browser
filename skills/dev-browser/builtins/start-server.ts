@@ -61,10 +61,14 @@ mkdirSync(profileDir, { recursive: true });
 console.log("Checking Playwright browser installation...");
 
 function findPackageManager(): { name: string; command: string } | null {
+  // npm first: CLAUDE.md makes Node/npm the standard for this repo, and
+  // package-lock.json is the tracked lockfile. Bun was first here, so on any
+  // machine that happens to have bun installed the browser install silently
+  // went through bunx instead — the opposite of the documented standard.
   const managers = [
-    { name: "bun", command: "bunx playwright install chromium" },
-    { name: "pnpm", command: "pnpm exec playwright install chromium" },
     { name: "npm", command: "npx playwright install chromium" },
+    { name: "pnpm", command: "pnpm exec playwright install chromium" },
+    { name: "bun", command: "bunx playwright install chromium" },
   ];
 
   for (const manager of managers) {

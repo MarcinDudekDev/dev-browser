@@ -6,7 +6,7 @@ Run browser automation scenarios from YAML files.
 
 ```bash
 # Run a scenario
-bun x tsx src/scenario-runner.ts scenarios/examples/wp-login.yaml
+npx tsx src/scenario-runner.ts scenarios/examples/wp-login.yaml
 
 # Or make it executable
 chmod +x src/scenario-runner.ts

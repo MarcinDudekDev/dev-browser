@@ -102,5 +102,9 @@ cmd_scenario() {
     fi
 
     start_server || return 1
-    cd "$DEV_BROWSER_DIR" && exec bun x tsx src/scenario-runner.ts "$SCENARIO_PATH"
+    # Was `bun x tsx`. Bun never actually ran this code: `bun x` only fetches and
+    # launches the tsx binary, and tsx spawns node, so `bun x tsx --version`
+    # reports "node v26.6.0". It was a slower npx that also made bun a hard
+    # requirement for scenarios. Local tsx is the same runtime, one less binary.
+    cd "$DEV_BROWSER_DIR" && exec ./node_modules/.bin/tsx src/scenario-runner.ts "$SCENARIO_PATH"
 }

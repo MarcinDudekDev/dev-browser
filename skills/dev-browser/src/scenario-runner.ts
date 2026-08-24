@@ -1,4 +1,4 @@
-#!/usr/bin/env -S bun x tsx
+#!/usr/bin/env -S npx tsx
 
 import { readFileSync } from "fs";
 import { parse as parseYaml } from "yaml";

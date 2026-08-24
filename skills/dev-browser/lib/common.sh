@@ -118,8 +118,8 @@ VISUAL_DIFF="${VISUAL_DIFF:-$DEV_BROWSER_HOME/visual-diff}"
 #                      net/tls + llhttp. Merged 2026-06-17.
 #
 # So the blocker is gone upstream. Verified empirically on 2026-08-24 against a
-# real dev-browser CDP endpoint, with postinstall.sh's Playwright patch REMOVED
-# so Bun stood on its own:
+# real dev-browser CDP endpoint, with the old postinstall.sh Playwright patch
+# REMOVED so Bun stood on its own (that patch is gone entirely now):
 #   bun 1.3.5  -> FAILS, hangs at "<ws connecting>" (predates the fix)
 #   bun 1.4.0  -> PASSES unaided; fix commit c4a937c is an ancestor of v1.4.0
 # Measured on a Playwright-importing script: tsx ~423ms, bun 1.4.0 ~196ms.

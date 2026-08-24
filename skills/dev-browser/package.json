@@ -6,7 +6,6 @@
     "@/*": "./src/*"
   },
   "scripts": {
-    "postinstall": "bash postinstall.sh",
     "start-server": "npx tsx builtins/start-server.ts",
     "dev": "npx tsx --watch src/index.ts",
     "test": "node --import tsx --test 'src/**/*.test.ts'",

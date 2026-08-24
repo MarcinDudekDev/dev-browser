@@ -114,7 +114,7 @@ cb_die() {
     _cb_err "  LOGGED OUT. Do not retry in a loop — no amount of retrying creates"
     _cb_err "  a session; a human has to approve one."
     _cb_err ""
-    _cb_err "  WHAT A HUMAN (Marcin) HAS TO DO — an agent cannot do this part:"
+    _cb_err "  WHAT A HUMAN HAS TO DO — an agent cannot do this part:"
 
     case "$state" in
         unreachable)

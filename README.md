@@ -240,6 +240,72 @@ cd ~/.claude/skills/dev-browser && npm install && npm run start-server
 
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI installed
 - [Node.js](https://nodejs.org) (v18 or later) with npm
+- **Optional:** [Bun](https://bun.sh) 1.4.0 or newer. Not required — without it
+  everything runs on tsx exactly as before. With it, the commands that start a
+  JavaScript interpreter get faster. See [Script runtime](#script-runtime).
+
+  ```bash
+  brew install bun     # macOS; homebrew-core ships 1.4.0+
+  ```
+
+  Bun **older than 1.4.0 is not used**, deliberately. Before 1.4.0, Bun's
+  `node:http` client never emitted the `upgrade` event for HTTP 101 responses,
+  which the `ws` library needs, so Playwright's `connectOverCDP()` hung
+  ([oven-sh/bun#9911](https://github.com/oven-sh/bun/issues/9911), fixed by
+  [#31587](https://github.com/oven-sh/bun/pull/31587)). 1.4.0 is the first
+  release whose history contains that fix.
+
+## Script runtime
+
+Since the Bun fix above landed, `run_ts()` runs **file scripts** under Bun and
+falls back to tsx otherwise. The fallback is checked by **version, not
+presence** — Bun 1.3.5 is common on PATH and would pass a `command -v bun`
+check while hanging every Playwright script.
+
+### What runs where
+
+The dividing line is **whether a command has a `.sh` companion**, not what kind
+of command it is.
+
+| | Runtime | Why |
+|---|---|---|
+| Commands **with** a `.sh` companion — `goto`, `click`, `fill`, `aria`, `text`, `wait`, `select`, `upload`, `keys`, `jsclick` | Neither | The `.sh` companion is a `curl` call straight to the running server. No JavaScript interpreter starts, so there is nothing to speed up. |
+| Commands **without** one — `chain`, `dismiss-consent`, `dismiss-overlays`, `drag`, `eval`, `extract`, `extract-css`, `fullpage`, `links`, `scroll-to`, `select-react`, `slide`, `snap` | **Bun** (or tsx if unavailable) | These fall through to `run_ts()`. |
+| Scratch `.ts` scripts you write and pass by path | **Bun** (or tsx) | Same path. |
+| stdin / heredoc scripts | tsx | `bun <no file>` opens a REPL. |
+| `server.sh` / `start-server.ts` | tsx | Launched directly, never through `run_ts()`. |
+| `scenario-runner.ts` | tsx | |
+| `npm test` and CI | Node | Tests do not go through `run_ts()`. |
+
+### Measured effect
+
+Medians, interleaved runs, same machine and same server. These are milliseconds
+saved per invocation, not a multiplier:
+
+| Command | Before (tsx) | After (Bun 1.4.0) | Delta |
+|---|---|---|---|
+| `extract` | 1131.4ms | 721.3ms | **−410ms** |
+| `eval` | 686.0ms | 484.9ms | **−201ms** |
+| `fullpage` | 773.3ms | 590.9ms | **−182ms** |
+| `links` | 699.8ms | 518.7ms | **−181ms** |
+| scratch `.ts` | 654.7ms | 493.6ms | **−161ms** |
+| `snap` | 645.3ms | 511.3ms | **−134ms** |
+| `goto`, `aria`, `text`, `fill`, `click`, `--screenshot`, `--scenarios` | — | — | **0** (within noise) |
+
+The zeros are structural, not a shortfall: those commands never start an
+interpreter. The saving is Bun's interpreter startup (~94ms measured bare) plus
+faster module loading; the browser round-trip costs the same either way, so the
+ratio depends on machine load. Quote the milliseconds, not a speedup factor.
+
+### Opting out
+
+```bash
+DEV_BROWSER_FORCE_TSX=1 dev-browser.sh <command>
+```
+
+Forces tsx even when a new-enough Bun is present. When the fallback triggers it
+is silent on stderr by design; the reason and the version seen are recorded in
+`~/.dev-browser/tmp/debug.log` as `run_ts: FALLBACK to tsx — reason=...`.
 
 ## Permissions
 

@@ -17,7 +17,9 @@
 #   2. a command that actually USES the sourced helpers succeeds
 set -uo pipefail
 
-REAL="/Users/cminds/dev-browser/skills/dev-browser/dev-browser.sh"
+# Resolve the real script from this file's own location rather than hardcoding a
+# home directory — the checkout lives somewhere different on every machine.
+REAL="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/dev-browser.sh"
 PATHS=(
     "$REAL"                                              # direct, no symlink
     "$HOME/Tools/dev-browser.sh"                         # one hop, on PATH

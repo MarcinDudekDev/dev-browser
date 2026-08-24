@@ -102,13 +102,10 @@ remap_legacy_scripts_path() {
 CLAUDE_TMP_ROOT="${CLAUDE_TMP_ROOT:-$HOME/claude-tmp}"
 VISUAL_DIFF="${VISUAL_DIFF:-$DEV_BROWSER_HOME/visual-diff}"
 
-# TypeScript runner. Everything here runs on tsx today.
+# TypeScript runner. File scripts go through bun when the installed bun is
+# new enough to contain the Playwright CDP fix; everything else stays on tsx.
 #
-# BUN STATUS — read this before "fixing" the TODO that used to be here.
-# The old comment said "switch back to bun once oven-sh/bun#9911 merges
-# (PR #27859)". That is misleading now: #27859 is CLOSED and will never merge,
-# so anyone checking it concludes the idea is dead. The opposite is true.
-#
+# BUN STATUS
 #   oven-sh/bun#9911   Playwright connectOverCDP() broken under Bun.
 #                      Opened 2024-04-04, CLOSED 2026-08-07 — fixed.
 #   oven-sh/bun#27859  Our fix for the missing 'upgrade' event on 101
@@ -117,17 +114,106 @@ VISUAL_DIFF="${VISUAL_DIFF:-$DEV_BROWSER_HOME/visual-diff}"
 #   oven-sh/bun#31587  What actually fixed it: node:http client rewritten on
 #                      net/tls + llhttp. Merged 2026-06-17.
 #
-# So the blocker is gone upstream. Verified empirically on 2026-08-24 against a
-# real dev-browser CDP endpoint, with the old postinstall.sh Playwright patch
-# REMOVED so Bun stood on its own (that patch is gone entirely now):
+# Verified 2026-08-24 against a real dev-browser CDP endpoint, no postinstall
+# Playwright patch (that file is gone; do not reintroduce it, do not add `ws`):
 #   bun 1.3.5  -> FAILS, hangs at "<ws connecting>" (predates the fix)
 #   bun 1.4.0  -> PASSES unaided; fix commit c4a937c is an ancestor of v1.4.0
 # Measured on a Playwright-importing script: tsx ~423ms, bun 1.4.0 ~196ms.
 #
-# What is still missing is only a new enough bun on the machine — 1.3.5 is what
-# is installed and it predates the fix. Switching run_ts() to bun is a decision
-# nobody has taken yet, not a blocked one.
+# Minimum version is 1.4.0, checked by VERSION not by `command -v bun`.
+# 1.3.5 is commonly on PATH and would pass a presence check while hanging
+# every Playwright script. 1.4.0 is the first tagged release whose ancestry
+# includes c4a937c; there is no 1.3.x we can treat as fixed.
+#
+# Scope (explicit):
+#   bun  — file arguments to run_ts(). That includes builtins that fall
+#          through run_script() onto a temp .mts (the Playwright path the
+#          2.2x number was measured on). Fast-path builtins/*.sh are curl
+#          and never reach here.
+#   tsx  — stdin/heredoc (inspect.sh, wplogin.sh, --watch-design). bun with
+#          no file is a REPL; these callers have always stayed on tsx.
+#   tsx  — server.sh / start-server.ts (not run_ts(); different failure
+#          mode: SIGKILL in launchPersistentContext).
+#   tsx  — scenario-runner.ts (not run_ts(); used to be `bun x tsx`, which
+#          never ran under bun — see commit 1d7f2cd).
+#   node — npm test and CI. Tests do not go through run_ts(); do not add
+#          setup-bun as unused theater.
+#
+# Always `bun run -- <file>`, never `bun x`. `bun x tsx` only launches the
+# tsx binary, which then spawns node.
+#
+# DEV_BROWSER_FORCE_TSX=1 skips bun (escape hatch if a bun regression lands).
+# Fallback to tsx is silent on stderr (0-byte stderr is a hard requirement);
+# the reason is in the debug log.
+
+RUN_TS_MIN_BUN=1.4.0
+
+# 0 if $1 >= $2, both dotted versions. Strips a -prerelease suffix so
+# 1.4.0-canary compares as 1.4.0. Numeric, not string: 1.10.0 > 1.4.0.
+# No `read -a` (zsh-incompatible, and a failed parse compared 0.0.0==0.0.0
+# which would treat every bun as new enough — fail closed instead).
+_run_ts_semver_ge() {
+    local a="${1%%-*}" b="${2%%-*}" rest
+    local a1 a2 a3 b1 b2 b3
+    a1=${a%%.*}; rest=${a#*.}; [[ "$rest" == "$a" ]] && rest=0.0
+    a2=${rest%%.*}; a3=${rest#*.}; [[ "$a3" == "$rest" ]] && a3=0
+    a3=${a3%%.*}
+    b1=${b%%.*}; rest=${b#*.}; [[ "$rest" == "$b" ]] && rest=0.0
+    b2=${rest%%.*}; b3=${rest#*.}; [[ "$b3" == "$rest" ]] && b3=0
+    b3=${b3%%.*}
+    a1=${a1//[^0-9]/}; a2=${a2//[^0-9]/}; a3=${a3//[^0-9]/}
+    b1=${b1//[^0-9]/}; b2=${b2//[^0-9]/}; b3=${b3//[^0-9]/}
+    (( 10#${a1:-0} != 10#${b1:-0} )) && { (( 10#${a1:-0} > 10#${b1:-0} )); return; }
+    (( 10#${a2:-0} != 10#${b2:-0} )) && { (( 10#${a2:-0} > 10#${b2:-0} )); return; }
+    (( 10#${a3:-0} >= 10#${b3:-0} ))
+}
+
+# Cached: empty = not yet resolved, "-" = use tsx, otherwise path to bun.
+_RUN_TS_BUN=""
+
+_run_ts_find_bun() {
+    if [[ -n "$_RUN_TS_BUN" ]]; then
+        [[ "$_RUN_TS_BUN" != "-" ]] && { printf '%s' "$_RUN_TS_BUN"; return 0; }
+        return 1
+    fi
+    if [[ "${DEV_BROWSER_FORCE_TSX:-0}" == "1" ]]; then
+        _RUN_TS_BUN="-"
+        return 1
+    fi
+    local cand ver
+    cand=$(command -v bun 2>/dev/null) || {
+        _RUN_TS_BUN="-"
+        return 1
+    }
+    ver=$("$cand" --version 2>/dev/null) || {
+        _RUN_TS_BUN="-"
+        return 1
+    }
+    if _run_ts_semver_ge "$ver" "$RUN_TS_MIN_BUN"; then
+        _RUN_TS_BUN="$cand"
+        printf '%s' "$cand"
+        return 0
+    fi
+    log_debug "run_ts: bun ${ver} < ${RUN_TS_MIN_BUN} (oven-sh/bun#31587); using tsx"
+    _RUN_TS_BUN="-"
+    return 1
+}
+
 run_ts() {
+    # stdin/heredoc: always tsx. bun with no file starts a REPL.
+    if [[ $# -eq 0 || "$1" == "-" ]]; then
+        ./node_modules/.bin/tsx "$@"
+        return
+    fi
+    # Resolve in this shell, not in $() — a subshell would discard the cache
+    # and re-run bun --version (and the too-old debug log) on every call.
+    if [[ -z "$_RUN_TS_BUN" ]]; then
+        _run_ts_find_bun >/dev/null || true
+    fi
+    if [[ -n "$_RUN_TS_BUN" && "$_RUN_TS_BUN" != "-" ]]; then
+        "$_RUN_TS_BUN" run -- "$@"
+        return
+    fi
     ./node_modules/.bin/tsx "$@"
 }
 

@@ -117,6 +117,60 @@ describe("run_ts bun version gate", () => {
     });
   });
 
+  describe("debug log names the reason", () => {
+    // The fallback is deliberately silent on stderr — 0-byte stderr is a hard
+    // requirement for this tool. That makes the debug log the ONLY trace, so a
+    // vague line there turns "dev-browser got slower" into a bisect months later.
+    function fallbackLogLine(opts: { path: string; env?: Record<string, string> }): string {
+      const home = mkdtempSync(join(tmpdir(), "dbhome-"));
+      try {
+        execFileSync(
+          "bash",
+          ["-c", `DEV_BROWSER_DIR="${SKILL_DIR}"; source "${COMMON}" >/dev/null 2>&1; _run_ts_find_bun >/dev/null 2>&1 || true`],
+          { env: { ...process.env, PATH: opts.path, DEV_BROWSER_HOME: home, ...(opts.env ?? {}) } },
+        );
+        return execFileSync("bash", ["-c", `grep -o 'run_ts: FALLBACK.*' "${home}/tmp/debug.log" 2>/dev/null | head -1`], {
+          encoding: "utf8",
+        }).trim();
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    }
+
+    test("too-old bun logs the reason AND the version it saw", () => {
+      const f = fakeBun("1.3.5");
+      try {
+        const line = fallbackLogLine({ path: `${f.dir}:${BASE_PATH}` });
+        assert.match(line, /reason=bun-too-old/);
+        assert.match(line, /1\.3\.5/, "the version actually seen must be in the log, not just 'too old'");
+        assert.match(line, /1\.4\.0/, "the required minimum must be in the log");
+      } finally {
+        rmSync(f.dir, { recursive: true, force: true });
+      }
+    });
+
+    test("missing bun logs a distinct reason", () => {
+      const empty = mkdtempSync(join(tmpdir(), "nobun-"));
+      try {
+        assert.match(fallbackLogLine({ path: `${empty}:${BASE_PATH}` }), /reason=bun-not-found/);
+      } finally {
+        rmSync(empty, { recursive: true, force: true });
+      }
+    });
+
+    test("forced tsx logs a distinct reason", () => {
+      const f = fakeBun("1.4.0");
+      try {
+        assert.match(
+          fallbackLogLine({ path: `${f.dir}:${BASE_PATH}`, env: { DEV_BROWSER_FORCE_TSX: "1" } }),
+          /reason=forced/,
+        );
+      } finally {
+        rmSync(f.dir, { recursive: true, force: true });
+      }
+    });
+  });
+
   test("an old bun is never EXECUTED, not just deselected", () => {
     // The strongest form of the guard: prove run_ts did not hand the script to
     // a bun that would hang. The fake records every non---version invocation.

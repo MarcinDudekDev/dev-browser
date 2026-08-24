@@ -177,15 +177,18 @@ _run_ts_find_bun() {
         return 1
     fi
     if [[ "${DEV_BROWSER_FORCE_TSX:-0}" == "1" ]]; then
+        log_debug "run_ts: FALLBACK to tsx — reason=forced (DEV_BROWSER_FORCE_TSX=1); bun not probed"
         _RUN_TS_BUN="-"
         return 1
     fi
     local cand ver
     cand=$(command -v bun 2>/dev/null) || {
+        log_debug "run_ts: FALLBACK to tsx — reason=bun-not-found; no 'bun' on PATH; expected >= ${RUN_TS_MIN_BUN}"
         _RUN_TS_BUN="-"
         return 1
     }
     ver=$("$cand" --version 2>/dev/null) || {
+        log_debug "run_ts: FALLBACK to tsx — reason=version-probe-failed; '${cand} --version' did not run; expected >= ${RUN_TS_MIN_BUN}"
         _RUN_TS_BUN="-"
         return 1
     }
@@ -194,7 +197,12 @@ _run_ts_find_bun() {
         printf '%s' "$cand"
         return 0
     fi
-    log_debug "run_ts: bun ${ver} < ${RUN_TS_MIN_BUN} (oven-sh/bun#31587); using tsx"
+    # Names the reason AND the version actually seen. The fallback is silent on
+    # stderr by design (0-byte stderr is a hard requirement), so this line is the
+    # only trace. Someone chasing "dev-browser got slower" months from now should
+    # find the answer here rather than having to bisect: a too-old bun costs the
+    # ~94ms of interpreter startup this migration bought, and nothing announces it.
+    log_debug "run_ts: FALLBACK to tsx — reason=bun-too-old; saw ${ver} at ${cand}, need >= ${RUN_TS_MIN_BUN} (oven-sh/bun#31587 fixed the Playwright CDP hang; older bun hangs on connectOverCDP). Fix: brew upgrade bun"
     _RUN_TS_BUN="-"
     return 1
 }

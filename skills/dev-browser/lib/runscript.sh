@@ -41,19 +41,100 @@ run_script_fast() {
     bash "$shell_script"
 }
 
+## Decide what to do about a .sh companion sitting next to a .ts script.
+## Echoes exactly one of: none | run:<path> | announce:<path> | refuse:<path>
+##
+## Pure decision, no side effects, so it can be tested directly — see
+## src/companion-guard.test.ts.
+##
+## WHY THIS IS NOT JUST "run it"
+## -----------------------------
+## The companion fast path is a deliberate, reviewed pairing for the shipped
+## commands in builtins/ (12 of them: goto, click, fill, aria, ...). There the
+## .sh is version-controlled next to its .ts and running it is the whole point.
+##
+## Anywhere else the same rule silently swaps out the code you asked to run.
+## On 2026-08-24 a scratch ~/claude-tmp/dev-browser/probe.ts ran a stale
+## probe.sh from 2026-07-31 that had nothing to do with it, and printed that
+## script's output as if it were the caller's. It was caught only because the
+## output was obviously unrelated; a closer collision reads as a passing test.
+## Silently running different code than the caller named is worse than an error.
+##
+## So: shipped pairs stay silent and unchanged, scratch pairs must announce
+## themselves, and the specific shape of the accident above — a companion OLDER
+## than the .ts next to it — is refused outright.
+resolve_companion() {
+    local script_file="$1"
+    [[ -n "$script_file" && -f "$script_file" ]] || { echo "none"; return 0; }
+
+    local companion="${script_file%.ts}.sh"
+    [[ -f "$companion" ]] || { echo "none"; return 0; }
+
+    # Shipped builtins: the intended use. Silent, so this guard cannot
+    # reintroduce the per-command stderr noise just removed in 9115b4c.
+    local companion_dir builtins_dir
+    companion_dir="$(cd "$(dirname "$companion")" 2>/dev/null && pwd)"
+    builtins_dir="$(cd "$DEV_BROWSER_DIR/builtins" 2>/dev/null && pwd)"
+    if [[ -n "$builtins_dir" && "$companion_dir" == "$builtins_dir" ]]; then
+        echo "run:$companion"; return 0
+    fi
+
+    # Outside builtins/: a companion older than the .ts it would replace is the
+    # collision shape, not a pairing anyone just wrote.
+    if [[ "$companion" -ot "$script_file" ]]; then
+        if [[ "${DEV_BROWSER_ALLOW_STALE_COMPANION:-0}" == "1" ]]; then
+            echo "announce:$companion"; return 0
+        fi
+        echo "refuse:$companion"; return 0
+    fi
+
+    echo "announce:$companion"
+}
+
 run_script() {
     local script_file="$1"
 
     # Fast path: check for .sh companion script (server-side, no tsx)
-    if [[ -n "$script_file" && -f "$script_file" ]]; then
-        local shell_companion="${script_file%.ts}.sh"
-        if [[ -f "$shell_companion" ]]; then
-            run_script_fast "$shell_companion"
+    local _companion_decision _companion
+    _companion_decision="$(resolve_companion "$script_file")"
+    _companion="${_companion_decision#*:}"
+    case "$_companion_decision" in
+        run:*)
+            run_script_fast "$_companion"
             local fast_exit=$?
             # Exit 99 = ARIA ref or feature needing tsx; fall through
             [[ $fast_exit -ne 99 ]] && return $fast_exit
-        fi
-    fi
+            ;;
+        announce:*)
+            echo "NOTE: dev-browser is running a companion shell script, not the .ts you named." >&2
+            echo "  running:  $_companion" >&2
+            echo "  you said: $script_file" >&2
+            echo "  A <name>.sh next to <name>.ts always wins — it is the server-side fast path." >&2
+            echo "  If that is not what you wanted, rename your script or delete the .sh." >&2
+            run_script_fast "$_companion"
+            local fast_exit=$?
+            [[ $fast_exit -ne 99 ]] && return $fast_exit
+            ;;
+        refuse:*)
+            echo "" >&2
+            echo "ERROR: refusing to silently run a stale companion script." >&2
+            echo "  you asked for: $script_file" >&2
+            echo "  companion:     $_companion" >&2
+            echo "" >&2
+            echo "  dev-browser runs <name>.sh when it sits next to <name>.ts, but this" >&2
+            echo "  companion is OLDER than the script you named, which almost always means" >&2
+            echo "  a leftover file happens to share the name — not a pair you wrote." >&2
+            echo "  Running it would execute code you did not ask for and print its output" >&2
+            echo "  as if it were yours." >&2
+            echo "" >&2
+            echo "  Pick one:" >&2
+            echo "    rm $_companion                      # it is junk" >&2
+            echo "    mv $script_file <something-else>.ts # keep both, drop the collision" >&2
+            echo "    DEV_BROWSER_ALLOW_STALE_COMPANION=1 <your command>  # you meant it" >&2
+            echo "" >&2
+            return 1
+            ;;
+    esac
 
     local PREFIX=$(get_project_prefix)
     # Export it: src/client.ts reads process.env.PROJECT_PREFIX to tell the server

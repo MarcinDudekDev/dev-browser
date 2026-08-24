@@ -2,7 +2,7 @@
   <img src="assets/header.png" alt="Dev Browser - Browser automation for Claude Code" width="100%">
 </p>
 
-> **Extended fork of [SawyerHood/dev-browser](https://github.com/SawyerHood/dev-browser)** — multi-browser modes, stealth automation, YAML scenarios, and 40+ CLI commands.
+> **Extended fork of [SawyerHood/dev-browser](https://github.com/SawyerHood/dev-browser)** — multi-browser modes, stealth automation, YAML scenarios, 40+ CLI commands, and an optional Bun runtime.
 
 A browser automation plugin for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) that lets Claude control your browser to test and verify your work as you develop. This fork turns a basic browser tool into a full automation platform.
 
@@ -22,6 +22,7 @@ A browser automation plugin for [Claude Code](https://docs.anthropic.com/en/docs
 | Script auto-injection | No | **client + page auto-injected** — zero boilerplate |
 | WordPress helpers | No | **--wplogin, auto-detect wp-test domains** |
 | Configurable paths | Hardcoded | **DEV_BROWSER_HOME env var** |
+| Script runtime | Node/tsx | **Optional [Bun 1.4.0+](#script-runtime)** — 130–410ms faster on commands that start an interpreter; falls back to tsx by version |
 | Architecture | Monolith | **Lazy-loaded lib/ modules** |
 
 ## Quick Start

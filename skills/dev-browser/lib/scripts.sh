@@ -43,7 +43,12 @@ cmd_run() {
     fi
 
     export SCRIPT_ARGS="$*"
-    exec "$DEV_BROWSER_DIR/dev-browser.sh" "$script_file"
+    # Re-exec drops argv. Without -p here, the wrapper resets PAGE_NAME to main
+    # and injects a blank tab (about:blank) instead of the live -p page.
+    local reexec=("$DEV_BROWSER_DIR/dev-browser.sh" -p "$PAGE_NAME")
+    [[ "${QUIET_CONSOLE:-0}" == "1" ]] && reexec+=(-q)
+    [[ "${CACHEBUST:-0}" == "1" || "${CACHEBUST_FLAG:-0}" == "1" ]] && reexec+=(--cachebust)
+    exec "${reexec[@]}" "$script_file"
 }
 
 cmd_list() {

@@ -221,8 +221,8 @@ unset _AUDIT_ACTIVE
 
 # Handle global flags: --cachebust, -p/--page, --quiet-console, --stealth, --user
 CACHEBUST_FLAG=0
-QUIET_CONSOLE=0
-PAGE_NAME="main"  # Default page name
+QUIET_CONSOLE="${QUIET_CONSOLE:-0}"
+PAGE_NAME="${PAGE_NAME:-main}"
 BROWSER_MODE=""  # empty = use current server mode, or dev if starting fresh
 NEW_ARGS=()
 while [[ $# -gt 0 ]]; do

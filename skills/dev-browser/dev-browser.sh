@@ -91,6 +91,10 @@ SCRIPTS
 DIAGNOSTICS
     --tabs                    List all browser tabs
     --cleanup --mine          Close only THIS session's pages (end-of-session)
+    --cleanup --only <name>   Close ONE of this session's pages. Use this, not
+                              --mine, in a tool that opened a single tab:
+                              --mine takes every page the project owns,
+                              including ones a human still had open.
     --cleanup [--all]         Close orphaned tabs
     --cleanup --project <n>   Close specific project's pages
     --debug                   Show debug log

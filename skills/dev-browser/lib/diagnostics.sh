@@ -82,6 +82,26 @@ cmd_cleanup() {
     local mode="${1:-blank}"
     local project_prefix="$2"
 
+    # --only <name>: close ONE page of this session, not the whole project.
+    # Named --only, not --page: -p/--page is already the global page-selector
+    # flag and is consumed before --cleanup ever sees it.
+    # --mine closes every page the project owns, which is right at the end of a
+    # session and wrong for a tool that opened a single tab: such a tool would
+    # wipe out tabs a human, or another tool, still had open in the same
+    # project. Measured 2026-09-21: every jev-browser run was silently closing
+    # unrelated dev-browser pages, which looked like tabs "closing by
+    # themselves". The prefix match also takes <prefix>-<name>-* , so a tool
+    # with a helper page (jev, jev-tab) still cleans up after itself in one call.
+    if [[ "$mode" == "--only" ]]; then
+        if [[ -z "$project_prefix" ]]; then
+            echo "Usage: --cleanup --only <page-name>" >&2
+            return 1
+        fi
+        mode="--project"
+        project_prefix="$(get_project_prefix)-${project_prefix}"
+        echo "Cleaning up page '$project_prefix' only" >&2
+    fi
+
     # --mine: close only THIS session's pages (alias for --project <my-prefix>).
     # This is the correct end-of-session cleanup — never touches other sessions.
     if [[ "$mode" == "--mine" ]]; then

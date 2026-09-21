@@ -69,11 +69,11 @@ print()
 if other:
     print(f'Pages ({len(other)}):')
     for t in other:
-        print(f'  {t.get(\"url\",\"?\")[:70]}')
+        print(f'  {t.get(\"url\",\"?\")}')
 if frames:
     print(f'Iframes ({len(frames)}): (embedded in a page, NOT separate tabs)')
     for t in frames:
-        print(f'  - {t.get(\"url\",\"?\")[:70]}')
+        print(f'  - {t.get(\"url\",\"?\")}')
 if blank:
     print(f'about:blank ({len(blank)}): (orphaned, safe to close)')
 "

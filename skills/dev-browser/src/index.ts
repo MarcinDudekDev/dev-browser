@@ -1,5 +1,5 @@
 import express, { type Express, type Request, type Response, type NextFunction } from "express";
-import { chromium, type BrowserContext, type Page } from "playwright";
+import { chromium, type BrowserContext, type CDPSession, type Page } from "playwright";
 import { mkdirSync, existsSync, readFileSync, writeFileSync, rmSync } from "fs";
 import { execFile } from "child_process";
 import { join, isAbsolute, resolve } from "path";
@@ -485,6 +485,49 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     })(), TIMEOUTS.MEDIUM, "getTargetId timed out after 10s");
   }
 
+  // ── Quiet page creation (headful dev/stealth only) ───────────────
+  // Playwright's context.newPage() sends Target.createTarget WITHOUT `background`,
+  // which Chromium opens as a FOREGROUND tab: the app activates and yanks keyboard
+  // focus from whatever the human is typing into. Measured 2026-09-21 with a 10ms
+  // frontmost sampler: plain createTarget -> "Google Chrome for Testing" frontmost
+  // within 28ms; createTarget {background: true} -> the frontmost app never
+  // changes, even when the tab needs a brand-new window. Playwright still sees
+  // the page (browser-level auto-attach), and screenshots of a background tab
+  // render normally. `background` is documented as Mac/Android-only, which is
+  // exactly where the theft happens.
+  //
+  // The osascript restoreFocus() path stays as a FALLBACK only: it needs the
+  // Automation -> System Events TCC grant, which this launch context does not
+  // have (osascript answers -1743; no osascript child ever appeared under the
+  // server during a create), so on its own it never fired.
+  let quietSession: CDPSession | null = null;
+  let quietSessionContext: BrowserContext | null = null;  // invalidated on relaunch
+
+  async function createPageQuietly(): Promise<Page> {
+    if (browserMode === "user" || headless) return context.newPage();
+    const parent = context.browser();
+    if (!parent) return context.newPage();
+    if (quietSessionContext !== context || !quietSession) {
+      quietSession = await parent.newBrowserCDPSession();
+      quietSessionContext = context;
+    }
+    const before = new Set<Page>(context.pages());
+    const { targetId } = await quietSession.send("Target.createTarget", { url: "about:blank", background: true });
+    // Playwright surfaces the new target in context.pages() a few ms later; pick
+    // it out by targetId so a concurrent create from another session can't be
+    // mistaken for ours.
+    const deadline = Date.now() + TIMEOUTS.MEDIUM;
+    while (Date.now() < deadline) {
+      for (const candidate of context.pages()) {
+        if (before.has(candidate)) continue;
+        before.add(candidate);
+        if ((await getTargetId(candidate)) === targetId) return candidate;
+      }
+      await new Promise<void>((resolve: () => void): void => { setTimeout(resolve, 25); });
+    }
+    throw new Error(`Quiet page creation: target ${targetId} never surfaced in the context`);
+  }
+
   // Express server for page management
   const app: Express = express();
   app.use(express.json());
@@ -608,7 +651,14 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
       // so don't pay for the check.
       const focusedBefore = headless ? undefined : await frontmostApp();
       // Create new page in the persistent context (with timeout to prevent hangs)
-      const page = await withTimeout(context.newPage(), TIMEOUTS.LONG, "Page creation timed out after 30s");
+      const page = await withTimeout(
+        createPageQuietly().catch((err: unknown): Promise<Page> => {
+          console.warn(`Quiet page creation failed, falling back to newPage(): ${String(err)}`);
+          return context.newPage();
+        }),
+        TIMEOUTS.LONG,
+        "Page creation timed out after 30s",
+      );
       // Fire-and-forget: reasserts focus in the background over the next ~800ms so
       // Chromium's late window-raise can't keep the human's focus (see restoreFocus).
       void restoreFocus(focusedBefore);

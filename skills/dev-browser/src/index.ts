@@ -1189,6 +1189,19 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
             if (node.checked !== check) { node.click(); }
           }, shouldCheck);
           filledWith = `ref (${tagInfo.type})`;
+        } else if (tagInfo.type === "range") {
+          // A range ignores typed characters, and clicking one lands on the
+          // track — at the element centre, i.e. the midpoint of min..max.
+          // The text path below therefore used to set every slider to its
+          // midpoint and still report success: `fill e52=50` on a 20..250
+          // range produced 135. Set the value and fire the events the page
+          // listens for, exactly as the select branch does.
+          await element.evaluate((node: any, val: string): void => {
+            node.value = val;
+            node.dispatchEvent(new Event('input', { bubbles: true }));
+            node.dispatchEvent(new Event('change', { bubbles: true }));
+          }, value);
+          filledWith = "ref (range)";
         } else {
           // Text input / textarea / contenteditable
           await element.click();

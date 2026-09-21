@@ -379,6 +379,20 @@ function isElementHiddenForAria(element) {
   return belongsToDisplayNoneOrAriaHiddenOrNonSlotted(element);
 }
 
+// An author writing aria-hidden="true" has said this node is not part of the
+// accessible page. The snapshot's "ariaOrVisible" mode used to override that
+// whenever the node was still painted, and a decorative badge hidden with
+// opacity:0 is painted — so wpmultitool.com/pricing/ announced FOUR
+// "Your pick" badges to anything reading this tree, which is exactly the lie
+// the attribute was added to stop. Explicit aria-hidden wins over visibility;
+// display:none and friends keep their old behaviour so nothing else moves.
+function hasExplicitAriaHidden(element) {
+  for (let node = element; node; node = parentElementOrShadowHost(node)) {
+    if (getAriaBoolean(node.getAttribute?.("aria-hidden")) === true) return true;
+  }
+  return false;
+}
+
 function belongsToDisplayNoneOrAriaHiddenOrNonSlotted(element) {
   let hidden = cacheIsHidden?.get(element);
   if (hidden === undefined) {
@@ -651,6 +665,8 @@ function generateAriaTree(rootElement) {
     }
     if (node.nodeType !== Node.ELEMENT_NODE) return;
     const element = node;
+    // aria-hidden is the author speaking; it is not overridden by paint.
+    if (hasExplicitAriaHidden(element)) return;
     const isElementVisibleForAria = !isElementHiddenForAria(element);
     let visible = isElementVisibleForAria;
     if (options.visibility === "ariaOrVisible") visible = isElementVisibleForAria || isElementVisible(element);

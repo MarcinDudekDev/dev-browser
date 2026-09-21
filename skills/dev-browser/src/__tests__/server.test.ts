@@ -171,6 +171,14 @@ describe("ARIA Snapshot", (): void => {
     ariaSnapshot = data.snapshot;
   });
 
+  test("explicit aria-hidden is excluded even while painted", (): void => {
+    // An author writing aria-hidden="true" has said the node is not part of
+    // the accessible page. "ariaOrVisible" used to re-admit it whenever it was
+    // still painted, and opacity:0 is painted — which is how four decorative
+    // "Your pick" badges reached every consumer of this snapshot.
+    expect(ariaSnapshot).not.toContain("Decoy badge");
+  });
+
   test("snapshot contains expected elements", (): void => {
     expect(ariaSnapshot).toContain("heading");
     expect(ariaSnapshot).toContain("Test Page");
@@ -180,6 +188,33 @@ describe("ARIA Snapshot", (): void => {
     expect(ariaSnapshot).toContain("checkbox");
     expect(ariaSnapshot).toContain("combobox");
     expect(ariaSnapshot).toMatch(/\[ref=e\d+\]/);
+  });
+});
+
+// ── Fill (range by ref) ───────────────────────────────────────────
+
+describe("Fill a range input by ARIA ref", (): void => {
+  test("sets the asked value, not the track midpoint", async (): Promise<void> => {
+    const ariaRes = await api("POST", `/pages/${PAGE}/aria`);
+    const snap = (await ariaRes.json()).snapshot as string;
+    const line = snap.split("\n").find((l: string): boolean => l.includes("slider"));
+    expect(line).toBeDefined();
+    const ref = /\[ref=(e\d+)\]/.exec(line as string)?.[1];
+    expect(ref).toBeDefined();
+
+    const res = await api("POST", `/pages/${PAGE}/fill`, { target: ref, value: "50" });
+    expect(res.status).toBe(HTTP.OK);
+    expect((await res.json()).selector).toBe("ref (range)");
+
+    // The value itself — 135 is this range's midpoint, which a click produces.
+    const valRes = await api("POST", `/pages/${PAGE}/evaluate`, {
+      code: 'document.getElementById("rate").value',
+    });
+    expect((await valRes.json()).result).toBe("50");
+
+    // And the page was told, or a calculator listening on input never recomputes.
+    const evtRes = await api("POST", `/pages/${PAGE}/text`, { target: "#rate-events" });
+    expect((await evtRes.json()).text).toBe("input:50");
   });
 });
 

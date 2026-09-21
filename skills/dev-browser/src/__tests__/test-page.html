@@ -16,6 +16,12 @@
   <form id="test-form" onsubmit="event.preventDefault(); document.getElementById('result').textContent = 'Form submitted!'">
     <label for="username">Username</label>
     <input type="text" id="username" name="username" placeholder="Enter username">
+    <!-- Regression fixtures. The range's midpoint (135) is deliberately far
+         from the value the test asks for (50): a fill that clicks the track
+         instead of setting the value lands on 135 and used to report success. -->
+    <input type="range" id="rate" min="20" max="250" step="5" value="60">
+    <div id="rate-events"></div>
+    <div class="decoy" aria-hidden="true" style="opacity:0">Decoy badge</div>
 
     <label for="email">Email</label>
     <input type="email" id="email" name="email" placeholder="Enter email">
@@ -55,6 +61,14 @@
   <iframe id="nested-frame" name="nested" srcdoc="<html><body><p>Iframe content here</p></body></html>"></iframe>
 
   <script>
+    // A calculator only recomputes if the page is TOLD the range moved, so the
+    // regression test asserts the event, not just the value.
+    (function () {
+      var r = document.getElementById('rate');
+      var out = document.getElementById('rate-events');
+      if (!r || !out) return;
+      r.addEventListener('input', function () { out.textContent = 'input:' + r.value; });
+    })();
     document.getElementById('action-btn').addEventListener('click', function() {
       document.getElementById('result').textContent = 'Button clicked!';
     });

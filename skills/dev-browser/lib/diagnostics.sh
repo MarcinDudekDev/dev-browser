@@ -53,18 +53,27 @@ except:
     print('(server not running or CDP unavailable)')
     sys.exit(0)
 
+# CDP reports target type, so classify on that rather than guessing from the
+# URL. A cross-origin iframe is its OWN target: TrustPilot, hCaptcha and
+# Stripe frames were all being listed as Pages, so a clean goto of one page
+# showed four \'tabs\' and a checkout click showed seventeen. Anything reading
+# this output to decide \'did a tab open\' was being told yes by an iframe.
 blank = [t for t in tabs if t.get('url','').startswith('about:')]
-stripe = [t for t in tabs if 'stripe' in t.get('url','').lower()]
-other = [t for t in tabs if not t.get('url','').startswith('about:') and 'stripe' not in t.get('url','').lower()]
+frames = [t for t in tabs if t.get('type') == 'iframe']
+other = [t for t in tabs
+         if t.get('type') != 'iframe'
+         and not t.get('url','').startswith('about:')]
 
-print(f'Total: {len(tabs)} tabs')
+print(f'Total: {len(tabs)} targets')
 print()
 if other:
     print(f'Pages ({len(other)}):')
     for t in other:
         print(f'  {t.get(\"url\",\"?\")[:70]}')
-if stripe:
-    print(f'Stripe iframes ({len(stripe)}): (created by payment forms)')
+if frames:
+    print(f'Iframes ({len(frames)}): (embedded in a page, NOT separate tabs)')
+    for t in frames:
+        print(f'  - {t.get(\"url\",\"?\")[:70]}')
 if blank:
     print(f'about:blank ({len(blank)}): (orphaned, safe to close)')
 "

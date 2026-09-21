@@ -591,6 +591,7 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
               `(limit ${String(LIMITS.MAX_PAGES_PER_PROJECT)}): ${owned.join(", ")}. ` +
               `Each open tab costs ~85MB in the SHARED browser, so close what you finished with:\n` +
               `  dev-browser.sh --cleanup --mine        # close this project's pages\n` +
+            `  dev-browser.sh --cleanup --only <page> # close just one (use this from a tool)\n` +
               `  await client.close("<name>")           # close one from a script\n` +
               `Reuse an existing page name instead of opening another, or raise the cap with ` +
               `DEV_BROWSER_MAX_PAGES=N when starting the server.`,

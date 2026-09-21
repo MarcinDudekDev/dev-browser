@@ -94,6 +94,7 @@ dev-browser.sh --status              # Show all server states
 
 **The server is SHARED by all Claude sessions** — its browser holds other sessions' tabs.
 - End of session / done with browser: `dev-browser.sh --cleanup --mine` (closes only YOUR pages). Never `--stop`.
+- **Writing a TOOL that opens one page? Use `--cleanup --only <page>`, not `--mine`.** `--mine` closes every page the PROJECT owns, so a tool that ends each run with it silently closes tabs a human, or another tool, still had open under the same prefix. Measured 2026-09-21: that is exactly what one CLI was doing on every invocation, and it looked like dev-browser closing tabs by itself. `--mine` is right at the END OF A SESSION, wrong inside a tool.
 - Server problems: just run `--server` — it detects zombies and restarts itself. `--stop --force` only if `--server` fails twice.
 
 ## Flags

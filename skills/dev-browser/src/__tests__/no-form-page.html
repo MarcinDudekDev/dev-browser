@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>No Form Page</title></head>
+<body>
+  <!-- Deliberately contains NO <form> anywhere. fill.sh asks the server for
+       page state after a fill, and that state is built by enumerating forms;
+       with none, it comes back empty. The script's last command used to be
+       the falsy test guarding that state, so a successful fill exited 1.
+       test-page.html cannot catch this: it has a <form>, so its state is
+       never empty no matter which control you fill. -->
+  <h1>No Form Page</h1>
+  <input type="range" id="loose-rate" min="0" max="10" step="1" value="5">
+</body>
+</html>

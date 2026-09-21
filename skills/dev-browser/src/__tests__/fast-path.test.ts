@@ -132,6 +132,42 @@ describe("Fast-Path Shell Scripts", (): void => {
     expect(result.stdout).toContain("Filled: username");
   });
 
+  test("fill.sh exits 0 on a page with no form at all", async (): Promise<void> => {
+    // The script's last command was `[[ -n "$state" ]] && echo "$state"`, and
+    // a falsy final command IS the exit status. fill.sh asks the server for
+    // page state after filling, and that state is built by enumerating forms
+    // — on a page with none it comes back empty, so a successful fill exited
+    // 1. Measured on a pricing page whose sliders sit in no form, where it
+    // fed a consuming agent's browser-failure counter.
+    // This needs its OWN page: test-page.html has a <form>, so its state is
+    // never empty and the bug cannot reproduce there.
+    const noFormUrl = pathToFileURL(join(__dirname, "no-form-page.html")).href;
+    await fetch(`${BASE}/pages/${PAGE_ID}/goto`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: noFormUrl }),
+    });
+    try {
+      const result = await runScript("fill.sh", "loose-rate=7");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Filled: loose-rate");
+
+      // Exit 0 must mean it filled, not that the state check was deleted.
+      const check = await fetch(`${BASE}/pages/${PAGE_ID}/evaluate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: 'document.getElementById("loose-rate").value' }),
+      });
+      expect(((await check.json()) as any).result).toBe("7");
+    } finally {
+      await fetch(`${BASE}/pages/${PAGE_ID}/goto`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: TEST_PAGE_URL }),
+      });
+    }
+  });
+
   test("fill.sh JSON mode succeeds", async (): Promise<void> => {
     const json = JSON.stringify({ email: "test@test.com" });
     const result = await runScript("fill.sh", json);

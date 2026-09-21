@@ -110,3 +110,8 @@ fi
 echo "Filled: $target"
 state=$(echo "$result" | jq -r '.state // empty')
 [[ -n "$state" ]] && echo "$state"
+# A falsy final command IS the script's exit status. The page returns no
+# `state` for a control outside a <form> — a bare range input, for one — so
+# the test above went false and a successful fill exited 1. The two branches
+# above already end with an explicit exit 0; this one did not.
+exit 0

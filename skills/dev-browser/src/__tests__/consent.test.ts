@@ -195,6 +195,19 @@ const FIXTURE_STICKY = `
     <button id="sticky-rej">Reject all</button>
   </div>`;
 
+/**
+ * Google wraps button labels in bidi isolates — the captured ARIA carried them
+ * on the language chip ("\u202apolski\u202c"). A label that arrives inside
+ * them must still match, which is what normalize() strips them for. Nothing
+ * else here needs that strip, so this fixture is what keeps it from rotting
+ * into decoration.
+ */
+const FIXTURE_BIDI_LABEL = `
+  <div role="dialog" aria-modal="true">
+    <a href="https://policies.google.com/privacy">privacy</a>
+    <button id="bidi-rej">\u202aOdrzu\u0107\u202c \u2066wszystko\u2069</button>
+  </div>`;
+
 async function setContent(body: string): Promise<void> {
   await page.setContent(`<html><body>${body}${RECORDER}</body></html>`, {
     waitUntil: "domcontentloaded",
@@ -227,6 +240,13 @@ describe("Google account-consent dialog", () => {
     const result = await dismissGoogleAccountConsent(page);
     expect(result).toBe(null);
     expect(await clicked()).toEqual([]);
+  });
+
+  test("matches a reject label wrapped in bidi marks", async () => {
+    await setContent(FIXTURE_BIDI_LABEL);
+    const result = await dismissGoogleAccountConsent(page);
+    expect(await clicked()).toEqual(["bidi-rej"]);
+    expect(result).toMatch(/Reject/);
   });
 
   test("leaves another vendor's cookie bar alone", async () => {

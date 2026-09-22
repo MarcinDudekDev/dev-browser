@@ -88,7 +88,7 @@ const ACCEPT_ALL_TEXTS = new Set([
 // along with whitespace before comparing.
 function normalize(text: string | null): string {
   return (text ?? "")
-    .replace(/[‎‏‪-‮⁦-⁩﻿]/g, "")
+    .replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, "")
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();

@@ -842,8 +842,15 @@ function renderAriaTree(ariaSnapshot) {
     // form, the arms differing only by that one paragraph:
     //   input present: 4,4,4,4,4,4,4,4 actions  (mean 4.00 - never better)
     //   input absent:  6,4,4,4,6,6,4,6 actions  (mean 5.00 - reaches 6 half the time)
-    // So it is a real ceiling rather than noise, and worth +1 action on average -
-    // not the "+2 every run" the first three runs suggested.
+    // CORRECTION, same day: that comparison was CONFOUNDED. With the input present
+    // in BOTH arms and only the <select> swapped for a text input, the ceiling
+    // followed the DROPDOWN - 4,4,6,4,4,6,4,4 with it against 6,6,6,6,6,6,6,6
+    // without, 8 runs each. Deleting the logo paragraph was tilting which verb
+    // jev picked for the combobox. The file input's real cost is UNKNOWN.
+    //
+    // None of which weakens the case for the markers themselves: they are facts a
+    // role hides, and a consumer that cannot see them cannot reason about them.
+    // That was the reason to add them, not a benchmark number.
     //
     // The rest are the same kind of loss. A role of "textbox" says nothing about
     // whether the field wants an email, a URL or a date; nothing about whether it

@@ -44,12 +44,22 @@ afterEach(async () => {
   await context.close();
 });
 
-/** Every button records its own id on click, so we assert on WHICH one was hit. */
+/**
+ * Every button records its own id on click, so we assert on WHICH one was hit.
+ * A click also unmounts the enclosing dialog (or the bare button when there is
+ * none) — the real modal removes itself on dismissal, and "did it actually go
+ * away" is part of what dismissGoogleAccountConsent now reports. A fixture can
+ * opt out by setting window.__noDismiss, which models a click that lands but
+ * dismisses nothing.
+ */
 const RECORDER = `<script>
   window.__clicked = [];
   document.addEventListener('click', function (e) {
     var b = e.target.closest('button');
     if (b) window.__clicked.push(b.id || b.textContent.trim());
+    if (window.__noDismiss) return;
+    var d = e.target.closest('[role="dialog"]');
+    if (d) d.remove(); else if (b) b.remove();
   });
 </script>`;
 
@@ -119,6 +129,72 @@ const FIXTURE_OTHER_VENDOR_MODAL = `
     <button id="accept-me">Accept all</button>
   </div>`;
 
+/**
+ * The reject id on a page with no dialog at all. Google reuses its obfuscated
+ * id namespace across surfaces, so the id alone must never scope a click —
+ * only the verified-dialog check keeps this from firing.
+ */
+const FIXTURE_STRAY_ID = `
+  <button id="W0wltc">Permanently delete account</button>`;
+
+/**
+ * A real Google dialog where the W0wltc id has rotated onto the ACCEPT button.
+ * The label check is the only thing standing between this and consenting on
+ * the user's behalf: the id clause must refuse the accept label and let the
+ * text clause find the genuinely reject-labelled sibling.
+ */
+const FIXTURE_ACCEPT_WEARS_ID = `
+  <div id="xe7COe" role="dialog" aria-modal="true"
+       aria-label="Zanim przejdziesz do wyszukiwarki Google">
+    <a href="https://policies.google.com/technologies/cookies">cookies</a>
+    <button id="W0wltc">Zaakceptuj wszystko</button>
+    <button id="L2AGLb">Odrzuć wszystko</button>
+  </div>`;
+
+/**
+ * A dialog linking to a lookalike host — substring href matching passes it,
+ * the host check does not. The "Reject all" wording is bait: text matching
+ * cannot see that this is not Google's modal, only the link can.
+ */
+const FIXTURE_EVIL_HOST = `
+  <div role="dialog" aria-modal="true">
+    <a href="https://policies.google.com.evil.example/x">privacy</a>
+    <button id="evil-rej">Reject all</button>
+  </div>`;
+
+/**
+ * The observed container id without the dialog role. Google stamps obfuscated
+ * ids on plain layout containers too, so #xe7COe alone must not scope clicks.
+ */
+const FIXTURE_ID_NO_ROLE = `
+  <div id="xe7COe">
+    <a href="https://policies.google.com/privacy">privacy</a>
+    <button id="x-rej">Reject all</button>
+  </div>`;
+
+/**
+ * A genuine policies.google.com link plus real "Reject all" wording — but the
+ * container is a plain div, not a dialog. Pins the dialog-shape requirement:
+ * mutating GOOGLE_DIALOG to 'div' must turn this red.
+ */
+const FIXTURE_NO_DIALOG = `
+  <div>
+    <a href="https://policies.google.com/technologies/cookies">cookies</a>
+    <button id="div-rej">Reject all</button>
+  </div>`;
+
+/**
+ * A real Google dialog whose reject button stays put after the click — a no-op
+ * handler, a covered target. The dismissal failed, so the answer must be null;
+ * the click is still honestly recorded as attempted.
+ */
+const FIXTURE_STICKY = `
+  <script>window.__noDismiss = true;</script>
+  <div role="dialog" aria-modal="true">
+    <a href="https://policies.google.com/privacy">privacy</a>
+    <button id="sticky-rej">Reject all</button>
+  </div>`;
+
 async function setContent(body: string): Promise<void> {
   await page.setContent(`<html><body>${body}${RECORDER}</body></html>`, {
     waitUntil: "domcontentloaded",
@@ -165,5 +241,48 @@ describe("Google account-consent dialog", () => {
     const result = await dismissGoogleAccountConsent(page);
     expect(result).toBe(null);
     expect(await clicked()).toEqual([]);
+  });
+
+  test("ignores the reject id on a page with no dialog", async () => {
+    await setContent(FIXTURE_STRAY_ID);
+    const result = await dismissGoogleAccountConsent(page);
+    expect(result).toBe(null);
+    expect(await clicked()).toEqual([]);
+  });
+
+  test("never clicks an accept-labelled #W0wltc — falls through to the reject text", async () => {
+    await setContent(FIXTURE_ACCEPT_WEARS_ID);
+    const result = await dismissGoogleAccountConsent(page);
+    expect(await clicked()).toEqual(["L2AGLb"]);
+    expect(await clicked()).not.toContain("W0wltc");
+    expect(result).toMatch(/Reject/);
+  });
+
+  test("ignores a lookalike policies host", async () => {
+    await setContent(FIXTURE_EVIL_HOST);
+    const result = await dismissGoogleAccountConsent(page);
+    expect(result).toBe(null);
+    expect(await clicked()).toEqual([]);
+  });
+
+  test("ignores the observed container id without the dialog role", async () => {
+    await setContent(FIXTURE_ID_NO_ROLE);
+    const result = await dismissGoogleAccountConsent(page);
+    expect(result).toBe(null);
+    expect(await clicked()).toEqual([]);
+  });
+
+  test("ignores a genuine policies link outside any dialog", async () => {
+    await setContent(FIXTURE_NO_DIALOG);
+    const result = await dismissGoogleAccountConsent(page);
+    expect(result).toBe(null);
+    expect(await clicked()).toEqual([]);
+  });
+
+  test("reports failure when the click dismisses nothing", async () => {
+    await setContent(FIXTURE_STICKY);
+    const result = await dismissGoogleAccountConsent(page);
+    expect(result).toBe(null);
+    expect(await clicked()).toEqual(["sticky-rej"]);
   });
 });

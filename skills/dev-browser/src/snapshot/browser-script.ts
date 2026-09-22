@@ -835,10 +835,15 @@ function renderAriaTree(ariaSnapshot) {
     //
     // The case that forced it: <input type="file"> carries the implicit role
     // "button", so it arrives indistinguishable from button "Save draft". An
-    // agent can then neither aim an upload at it nor avoid it. Measured
-    // 2026-09-22 with jev-browser: the mere PRESENCE of one cost two unrelated
-    // controls on a 7-control form - 4 of 7 with it, 6 of 7 with only that one
-    // input deleted and every other byte identical.
+    // agent can then neither aim an upload at it nor avoid it.
+    //
+    // Effect size, measured properly after I first over-claimed it from 3 runs
+    // against 3. Eight runs per arm, interleaved on one server, same 7-control
+    // form, the arms differing only by that one paragraph:
+    //   input present: 4,4,4,4,4,4,4,4 actions  (mean 4.00 - never better)
+    //   input absent:  6,4,4,4,6,6,4,6 actions  (mean 5.00 - reaches 6 half the time)
+    // So it is a real ceiling rather than noise, and worth +1 action on average -
+    // not the "+2 every run" the first three runs suggested.
     //
     // The rest are the same kind of loss. A role of "textbox" says nothing about
     // whether the field wants an email, a URL or a date; nothing about whether it

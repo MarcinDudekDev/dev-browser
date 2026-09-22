@@ -104,6 +104,21 @@ const FIXTURE_OTHER_VENDOR = `
     <button id="accept-me">Accept all</button>
   </div>`;
 
+/**
+ * Somebody else's consent modal, in the same aria-modal shape Google uses and
+ * with the same button wording. ONLY the policies.google.com link separates it
+ * from the real thing — so this fixture is what pins that check. Without it the
+ * guard could be deleted and every test here would still pass, which is how a
+ * clause ends up load-bearing in the comments and nowhere else.
+ */
+const FIXTURE_OTHER_VENDOR_MODAL = `
+  <div role="dialog" aria-modal="true" aria-label="Cookie preferences">
+    <h1>We value your privacy</h1>
+    <a href="https://example.com/privacy">Privacy policy</a>
+    <button id="reject-me">Reject all</button>
+    <button id="accept-me">Accept all</button>
+  </div>`;
+
 async function setContent(body: string): Promise<void> {
   await page.setContent(`<html><body>${body}${RECORDER}</body></html>`, {
     waitUntil: "domcontentloaded",
@@ -140,6 +155,13 @@ describe("Google account-consent dialog", () => {
 
   test("leaves another vendor's cookie bar alone", async () => {
     await setContent(FIXTURE_OTHER_VENDOR);
+    const result = await dismissGoogleAccountConsent(page);
+    expect(result).toBe(null);
+    expect(await clicked()).toEqual([]);
+  });
+
+  test("leaves another vendor's aria-modal consent dialog alone", async () => {
+    await setContent(FIXTURE_OTHER_VENDOR_MODAL);
     const result = await dismissGoogleAccountConsent(page);
     expect(result).toBe(null);
     expect(await clicked()).toEqual([]);

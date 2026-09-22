@@ -1,6 +1,20 @@
 #!/bin/bash
 # Diagnostic commands: debug, crashes, tabs, cleanup
 
+# Page name for `--cleanup --only <name>`, accepted in either spelling.
+#
+# --tabs and every error message print the FULL registered name
+# (<project>-<page>), so pasting what you just read is the obvious move — and
+# it used to build <project>-<project>-<page>, match nothing, and report
+# success anyway (msg#4769). Only OUR OWN prefix is stripped: another
+# project's name is left intact rather than rewritten, because silently
+# turning "otherproj-main" into "myproj-main" would close the wrong tab.
+resolve_only_target() {
+    local my_prefix="$1" name="$2"
+    name="${name#${my_prefix}-}"
+    echo "${my_prefix}-${name}"
+}
+
 cmd_debug() {
     echo "=== RECENT DEBUG LOG (last 50 lines) ==="
     tail -50 "$DEBUG_LOG" 2>/dev/null || echo "(no debug log yet)"
@@ -107,7 +121,7 @@ cmd_cleanup() {
             return 1
         fi
         mode="--project"
-        project_prefix="$(get_project_prefix)-${project_prefix}"
+        project_prefix="$(resolve_only_target "$(get_project_prefix)" "$project_prefix")"
         echo "Cleaning up page '$project_prefix' only" >&2
     fi
 

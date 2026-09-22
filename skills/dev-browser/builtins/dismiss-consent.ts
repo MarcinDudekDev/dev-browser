@@ -1,6 +1,7 @@
 // Dismiss cookie consent overlays (Google CMP/FC, CookieBot, OneTrust, generic)
 // Usage: dev-browser.sh dismiss-consent
 // Tries multiple known consent frameworks in order
+import { dismissGoogleAccountConsent } from "@/consent.js";
 
 const dismissed: string[] = [];
 
@@ -47,7 +48,17 @@ if (dismissed.length === 0) {
     } catch {}
 }
 
-// Strategy 5: Generic consent banners (common patterns)
+// Strategy 5: Google's own account-consent modal ("Before you continue") —
+// a plain div dialog, no fc-* classes, so strategies 1-4 all miss it.
+// Reject-only by contract: it never clicks Accept.
+if (dismissed.length === 0) {
+    try {
+        const label = await dismissGoogleAccountConsent(page);
+        if (label) dismissed.push(label);
+    } catch {}
+}
+
+// Strategy 6: Generic consent banners (common patterns)
 if (dismissed.length === 0) {
     try {
         // Look for common accept/agree buttons in cookie banners
@@ -75,7 +86,7 @@ if (dismissed.length === 0) {
     } catch {}
 }
 
-// Strategy 6: JS-based dismissal (remove overlay elements)
+// Strategy 7: JS-based dismissal (remove overlay elements)
 if (dismissed.length === 0) {
     const removed = await page.evaluate(() => {
         const selectors = [

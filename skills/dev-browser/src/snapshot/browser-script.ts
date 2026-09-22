@@ -830,6 +830,36 @@ function renderAriaTree(ariaSnapshot) {
     if (ariaNode.pressed === "mixed") key += " [pressed=mixed]";
     if (ariaNode.pressed === true) key += " [pressed]";
     if (ariaNode.selected === true) key += " [selected]";
+    // Facts an ARIA ROLE HIDES, and which a form-filling agent needs. These were
+    // being thrown away on the way out of the snapshot.
+    //
+    // The case that forced it: <input type="file"> carries the implicit role
+    // "button", so it arrives indistinguishable from button "Save draft". An
+    // agent can then neither aim an upload at it nor avoid it. Measured
+    // 2026-09-22 with jev-browser: the mere PRESENCE of one cost two unrelated
+    // controls on a 7-control form - 4 of 7 with it, 6 of 7 with only that one
+    // input deleted and every other byte identical.
+    //
+    // The rest are the same kind of loss. A role of "textbox" says nothing about
+    // whether the field wants an email, a URL or a date; nothing about whether it
+    // is required; nothing about a maxlength that will silently truncate a
+    // tagline. Every one of those changes what a correct value looks like.
+    //
+    // No token here contains a quote, deliberately: a consumer that reads the
+    // accessible name as the first quoted span on the line must not pick one of
+    // these up instead.
+    var formEl = ariaNode.element;
+    if (formEl && formEl.tagName === "INPUT") {
+      var inputType = (formEl.getAttribute("type") || "text").toLowerCase();
+      if (inputType === "file") key += " [file]";
+      else if (["email", "url", "tel", "number", "date", "datetime-local",
+                "month", "week", "time", "password", "search"].indexOf(inputType) !== -1)
+        key += " [type=" + inputType + "]";
+    }
+    if (formEl && (formEl.tagName === "INPUT" || formEl.tagName === "TEXTAREA")
+        && formEl.maxLength > 0) key += " [maxlength=" + formEl.maxLength + "]";
+    if (formEl && formEl.required) key += " [required]";
+    if (formEl && formEl.readOnly) key += " [readonly]";
     if (ariaNode.ref) {
       key += " [ref=" + ariaNode.ref + "]";
       if (renderCursorPointer && hasPointerCursor(ariaNode)) key += " [cursor=pointer]";

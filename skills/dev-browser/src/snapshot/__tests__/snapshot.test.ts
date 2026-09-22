@@ -171,6 +171,58 @@ describe("ARIA Snapshot", () => {
     expect(snapshot).toContain("combobox");
   });
 
+  test("surfaces form facts the ARIA role hides", async () => {
+    // A role does not carry these, and an agent filling a form needs every one.
+    // The case that forced it: <input type="file"> has the implicit role
+    // "button", so it used to arrive indistinguishable from a submit button.
+    // Measured 2026-09-22 with jev-browser: the presence of one cost two
+    // unrelated controls on a 7-control form, because it became a click target
+    // that could never be satisfied.
+    await setContent(`
+      <html>
+        <body>
+          <input type="file" aria-label="Logo" />
+          <input type="email" aria-label="Email" required />
+          <input type="url" aria-label="Site" />
+          <input type="text" aria-label="Tagline" maxlength="60" />
+          <input type="text" aria-label="Locked" readonly />
+          <textarea aria-label="Bio" maxlength="500"></textarea>
+        </body>
+      </html>
+    `);
+
+    const snapshot = await getSnapshot();
+
+    expect(snapshot).toContain("[file]");
+    expect(snapshot).toContain("[type=email]");
+    expect(snapshot).toContain("[type=url]");
+    expect(snapshot).toContain("[required]");
+    expect(snapshot).toContain("[readonly]");
+    expect(snapshot).toContain("[maxlength=60]");
+    expect(snapshot).toContain("[maxlength=500]");
+    // The file input must NOT be mistaken for a typed text field.
+    expect(snapshot).not.toContain("[type=file]");
+  });
+
+  test("a plain text input stays unannotated", async () => {
+    // The pair for the check above. Marking everything would be as useless as
+    // marking nothing: a bare text input carries no hidden constraint, so it
+    // must come through clean.
+    await setContent(`
+      <html>
+        <body><input type="text" aria-label="Plain" /></body>
+      </html>
+    `);
+
+    const snapshot = await getSnapshot();
+
+    expect(snapshot).toContain("textbox");
+    expect(snapshot).not.toContain("[type=");
+    expect(snapshot).not.toContain("[required]");
+    expect(snapshot).not.toContain("[maxlength=");
+    expect(snapshot).not.toContain("[file]");
+  });
+
   test("renders nested structure correctly", async () => {
     await setContent(`
       <html>

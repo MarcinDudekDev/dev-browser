@@ -1,7 +1,7 @@
 import express, { type Express, type Request, type Response, type NextFunction } from "express";
-import { chromium, type BrowserContext, type CDPSession, type Page } from "playwright";
+import { chromium, type Browser, type BrowserContext, type CDPSession, type Page } from "playwright";
 import { mkdirSync, existsSync, readFileSync, writeFileSync, rmSync } from "fs";
-import { execFile } from "child_process";
+import { execFile, spawn, type ChildProcess } from "child_process";
 import { join, isAbsolute, resolve } from "path";
 import type { Socket } from "net";
 import type {
@@ -299,6 +299,60 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
   let browser: Awaited<ReturnType<typeof chromium.connectOverCDP>> | null = null;
   let userConn: CDPConnection | null = null;
 
+  // ── Quiet launch (headful macOS, dev/stealth) ─────────────────────
+  // launchPersistentContext() makes Chromium open a startup window, and on macOS
+  // the app ACTIVATES with it: measured 2026-09-23, a fresh launch put "Google
+  // Chrome for Testing" frontmost and it stayed there until a human clicked away.
+  // The background-tab fix (createPageQuietly) never covered this, because it
+  // only runs once the browser is up — and while the browser stayed alive for
+  // days the launch simply never happened. The first crash/reboot relaunch
+  // (2026-09-23 11:42) brought the theft back.
+  //
+  // So on macOS we spawn Chromium ourselves with --no-startup-window: no window,
+  // no activation. Playwright's persistent launch can't take that flag (it waits
+  // forever for the initial page), so we attach over CDP instead, and pages are
+  // then created as background tabs by createPageQuietly. Measured in isolation:
+  // spawn + attach + background create + goto + screenshot, 0 of 67 frontmost
+  // samples on the automation browser. test-focus-launch.ts is the live check.
+  const quietLaunch = isMac && !headless && browserMode !== "user";
+  const QUIET_VIEWPORT = { width: 1280, height: 720 };  // launchPersistentContext's default
+  let quietBrowser: Browser | null = null;
+  let quietChild: ChildProcess | null = null;
+
+  async function launchQuietly(): Promise<void> {
+    quietChild = spawn(chromium.executablePath(), [
+      "--no-startup-window",
+      `--remote-debugging-port=${cdpPort}`,
+      `--user-data-dir=${userDataDir}`,
+      "--use-mock-keychain", // silence macOS keychain noise (userCanceledErr -128)
+      "--restore-last-session",
+      "--disable-session-crashed-bubble",
+      "--no-first-run",
+      "--no-default-browser-check",
+      // A background tab in an occluded window must still render for screenshots.
+      "--disable-background-timer-throttling",
+      "--disable-backgrounding-occluded-windows",
+      "--disable-renderer-backgrounding",
+      ...(browserMode === "stealth" ? ["--disable-blink-features=AutomationControlled"] : []),
+    ], { stdio: "ignore" });
+    const response = await fetchWithRetry(`http://127.0.0.1:${cdpPort}/json/version`, 30, 100);
+    const cdpInfo = (await response.json()) as { webSocketDebuggerUrl: string };
+    wsEndpoint = cdpInfo.webSocketDebuggerUrl;
+    quietBrowser = await chromium.connectOverCDP(wsEndpoint);
+    const defaultContext = quietBrowser.contexts()[0];
+    if (!defaultContext) throw new Error("Quiet launch: attached browser has no default context");
+    context = defaultContext;
+  }
+
+  // Stops the quietly launched Chromium — connectOverCDP's close() only disconnects.
+  async function closeQuietBrowser(): Promise<void> {
+    try {
+      const session = await quietBrowser!.newBrowserCDPSession();
+      await session.send("Browser.close");
+    } catch { void 0; /* cleanup: browser already gone */ }
+    quietChild?.kill();
+  }
+
   // Reusable launcher for dev/stealth modes — called on startup and after browser crash
   // Never fall back to process.cwd() — that scatters .browser-data (and stale
   // Singleton locks) into whatever project dir the server was launched from.
@@ -317,6 +371,12 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
       // launchPersistentContext fails/hangs with "profile appears to be in use".
       for (const lock of ["SingletonLock", "SingletonCookie", "SingletonSocket"]) {
         try { rmSync(join(userDataDir, lock), { force: true }); } catch { void 0; }
+      }
+      if (quietLaunch) {
+        console.log("Launching browser quietly (no startup window, background tabs)...");
+        await launchQuietly();
+        console.log("Browser launched with persistent profile...");
+        return;
       }
       console.log("Launching browser with persistent context...");
       context = await chromium.launchPersistentContext(userDataDir, {
@@ -342,7 +402,9 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
   async function ensureContext(): Promise<void> {
     if (browserMode === "user") return;
     try {
-      // Quick liveness check — if context is closed this throws
+      // Quick liveness check — if context is closed this throws. A CDP-attached
+      // context survives its browser's death, so ask the connection too.
+      if (quietBrowser && !quietBrowser.isConnected()) throw new Error("browser disconnected");
       await context.pages();
     } catch { void 0; /* best-effort: browser context dead, relaunching below */
       console.log("Browser context is dead — relaunching...");
@@ -659,6 +721,9 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
         TIMEOUTS.LONG,
         "Page creation timed out after 30s",
       );
+      // A CDP-attached context has no default viewport; keep the size a
+      // persistent launch would have given the page.
+      if (quietLaunch) await page.setViewportSize(QUIET_VIEWPORT);
       // Fire-and-forget: reasserts focus in the background over the next ~800ms so
       // Chromium's late window-raise can't keep the human's focus (see restoreFocus).
       void restoreFocus(focusedBefore);
@@ -1711,7 +1776,8 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     // Close context (this also closes the browser) - but NOT in user mode
     if (browserMode !== "user") {
       try {
-        await context.close();
+        if (quietBrowser) await closeQuietBrowser();
+        else await context.close();
       } catch { void 0; /* cleanup: context might already be closed */ }
     } else {
       // In user mode, just disconnect our CDP client (NEVER close the user's browser)
@@ -1729,7 +1795,8 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
   // Synchronous cleanup for forced exits
   const syncCleanup = (): void => {
     try {
-      context.close();
+      if (quietChild) quietChild.kill();
+      else void context.close();
     } catch { void 0; /* cleanup: best effort on forced exit */ }
   };
 

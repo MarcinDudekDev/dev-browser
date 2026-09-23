@@ -10,7 +10,8 @@
 //              makes ensureContext() relaunch it
 //   restart  - server and Chromium both SIGKILLed, server started again on the
 //              same profile, so --restore-last-session has tabs to bring back
-// FAILS if the automation browser was frontmost in any sample.
+// FAILS if the automation browser became frontmost with no human mouse click in
+// the second before; a raise right after a click is reported but not counted.
 //
 // The frontmost app is read with `lsappinfo`, which needs no TCC grant, unlike
 // osascript + System Events, which answers -1743 from this launch context.
@@ -30,6 +31,11 @@ const CDP_PORT = 9341;
 const AUTOMATION_APP_RE = /Chrome for Testing|Chromium/i;
 const SAMPLE_MS = 40;
 const LATE_RAISE_MS = 1500;
+// Chromium writes its session file a few seconds after tabs change; without a
+// pause the restart round has nothing to restore and cannot catch a restore raise.
+const SESSION_SAVE_MS = 12_000;
+// Restored windows show up some time after launch, not during it.
+const RESTORE_WATCH_MS = 45_000;
 const HEALTH_TIMEOUT_MS = 60_000;
 
 const sleep = (ms: number): Promise<void> => new Promise((r): void => { setTimeout(r, ms); });
@@ -46,10 +52,26 @@ function frontmost(): Promise<string> {
   });
 }
 
+// Seconds since the last human MOUSE click. Clicking a visible automation window
+// makes it frontmost too, and that is not a steal. Typing never raises another
+// app, so key events must not excuse a raise: the pre-fix launch stole focus
+// while the human was typing (HIDIdleTime 0.2s) and an any-input timer called
+// that "human". JXA reads CGEventSource without any TCC grant.
+function humanIdleSeconds(): Promise<number> {
+  return new Promise((resolve): void => {
+    execFile("osascript", ["-l", "JavaScript", "-e",
+      "ObjC.import('CoreGraphics'); Math.min($.CGEventSourceSecondsSinceLastEventType(1, 1), $.CGEventSourceSecondsSinceLastEventType(1, 3))"],
+    (e, out): void => { const v = Number(String(out).trim()); resolve(e || !Number.isFinite(v) ? 0 : v); });
+  });
+}
+const HUMAN_QUIET_S = 1.0;
+
 class Harness {
   phase = "start";
   readonly seen = new Map<string, number>();
   readonly stolenIn = new Set<string>();
+  readonly humanRaised = new Set<string>();
+  private prev = "";
   private sampling = true;
   private sampler: Promise<void>;
   private servers: ChildProcess[] = [];
@@ -63,7 +85,12 @@ class Harness {
     while (this.sampling) {
       const app = await frontmost();
       this.seen.set(app, (this.seen.get(app) ?? 0) + 1);
-      if (AUTOMATION_APP_RE.test(app)) this.stolenIn.add(this.phase);
+      // Judge each RAISE once, at the transition: was a human just active?
+      if (AUTOMATION_APP_RE.test(app) && !AUTOMATION_APP_RE.test(this.prev)) {
+        const idle = await humanIdleSeconds();
+        (idle >= HUMAN_QUIET_S ? this.stolenIn : this.humanRaised).add(`${this.phase} (last click ${idle.toFixed(1)}s ago)`);
+      }
+      this.prev = app;
       await sleep(SAMPLE_MS);
     }
   }
@@ -138,11 +165,15 @@ async function main(): Promise<number> {
     await h.killBrowser();
     await h.drive("crash", "focus-b", "https://example.org/");
 
+    h.phase = "restart:session-save";
+    await sleep(SESSION_SAVE_MS);
     h.phase = "restart:launch";
     h.killServers();
     await h.killBrowser();
     await h.startServer();
     await h.drive("restart", "focus-c", "https://example.net/");
+    h.phase = "restart:restore-watch";
+    await sleep(RESTORE_WATCH_MS);
   } catch (err) {
     console.error(`${h.phase}: ${String(err)}\n--- server log (tail) ---\n${h.log.split("\n").slice(-40).join("\n")}`);
     throw err;
@@ -153,6 +184,7 @@ async function main(): Promise<number> {
 
   console.log(`frontmost before: ${before}`);
   console.log(`frontmost samples: ${JSON.stringify(Object.fromEntries(h.seen))}`);
+  if (h.humanRaised.size) console.log(`ignored, human click just before: ${[...h.humanRaised].join(", ")}`);
   if (h.stolenIn.size) {
     console.log(`FAIL: automation browser took focus during: ${[...h.stolenIn].join(", ")}`);
     return 1;

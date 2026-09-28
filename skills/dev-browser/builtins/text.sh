@@ -1,4 +1,5 @@
 #!/bin/bash
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/fastpath.sh"
 # Fast path: text via server endpoint (no tsx, no connectOverCDP)
 # Handles ARIA refs (e5) and CSS selectors — all server-side
 target="${SCRIPT_ARGS}"
@@ -13,7 +14,7 @@ PAGE_ID="${PREFIX}-${PAGE}"
 PORT="${SERVER_PORT}"
 
 body=$(jq -nc --arg target "$target" '{target: $target}')
-result=$(curl -s -m 10 -X POST "http://localhost:${PORT}/pages/${PAGE_ID}/text" -H 'Content-Type: application/json' -d "$body")
+result=$(fp_post "/pages/${PAGE_ID}/text" "$body" 10) || exit 1
 
 error=$(echo "$result" | jq -r '.error // empty' 2>/dev/null)
 if [[ -n "$error" ]]; then

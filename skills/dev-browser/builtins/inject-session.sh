@@ -1,4 +1,5 @@
 #!/bin/bash
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/fastpath.sh"
 # Inject full session (cookies + localStorage + IndexedDB) from Cookie Bridge
 # Usage: dev-browser.sh inject-session <domain> [cookie-bridge-port]
 # Handles Firebase Auth, Supabase, Auth0, and other modern auth systems
@@ -34,14 +35,16 @@ fi
 # shellcheck source=../lib/cookie-bridge.sh
 source "$_CB_LIB"
 
+# No reply from the server is fatal: every step below used to discard the reply
+# and print "Injected ..." regardless. Inside $(...) the exit only leaves the
+# subshell, so callers capture first and `|| exit 1`.
 _eval() {
-    curl -s -m 30 -X POST "${DB}/pages/${PAGE_ID}/evaluate" \
-        -H "Content-Type: application/json" \
-        -d "$(jq -n --arg code "$1" '{code: $code}')"
+    fp_post "/pages/${PAGE_ID}/evaluate" "$(jq -n --arg code "$1" '{code: $code}')" 30 || exit 1
 }
 
 # --- 0. Verify page is on the right origin ---
-current_url=$(_eval "location.href" | jq -r '.result // empty')
+href_reply=$(_eval "location.href") || exit 1
+current_url=$(jq -r '.result // empty' <<<"$href_reply")
 if [[ -z "$current_url" || "$current_url" == "about:blank" ]]; then
     echo "ERROR: Navigate to https://${domain} first" >&2
     echo "  e.g. dev-browser.sh --stealth goto https://${domain}" >&2
@@ -87,9 +90,7 @@ cb_assert_payload "$domain" "$cb_port" "$cookie_count" "$ls_count" "$idb_count"
 
 # --- 2. Inject cookies (Playwright context + document.cookie fallback) ---
 if [[ "$cookie_count" != "0" ]]; then
-    curl -s -m 10 -X POST "${DB}/cookies" \
-        -H "Content-Type: application/json" \
-        -d "{\"cookies\":${cookies_json}}" > /dev/null 2>&1
+    fp_post "/cookies" "{\"cookies\":${cookies_json}}" 10 > /dev/null || exit 1
 
     cookie_set_js=$(echo "$cb_result" | jq -r '.cookies[] | "document.cookie = \"" + .name + "=" + .value + "; path=" + .path + "; domain=." + (.domain | ltrimstr(".") | ltrimstr("www.")) + "\";"' 2>/dev/null | sort -u | tr '\n' ' ')
     if [[ -n "$cookie_set_js" ]]; then
@@ -205,7 +206,8 @@ delete window.__cb_idb;
 return "injected:" + results.join(",");
 })()'
 
-    result=$(_eval "$idb_code" | jq -r '.result // .error // "unknown"')
+    idb_reply=$(_eval "$idb_code") || exit 1
+    result=$(jq -r '.result // .error // "unknown"' <<<"$idb_reply")
     echo "Injected ${idb_count} IndexedDB databases (${result})"
 fi
 

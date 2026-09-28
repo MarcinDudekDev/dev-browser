@@ -1160,14 +1160,30 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
         } catch { void 0; /* best-effort: element may not be visible yet */ }
       };
 
-      // Try button role
-      try { const loc = entry.page.getByRole("button", { name: target }); await stealthMoveToLocator(loc); await loc.click({ timeout: TIMEOUTS.NAVIGATION }); clickedType = "button"; clicked = true; } catch { void 0; /* selector: try next matching strategy */ }
+      // A target that can only be a CSS/Playwright selector ("#ean-cancel", ".btn",
+      // "[data-x]", "css=…") goes straight to the selector click. Walking it through
+      // the role/frame/iframe chain first cost ~10s of timeouts before the real click,
+      // which outlived the CLI's reply window: the caller was told "Clicked" while the
+      // click had not happened yet (asrowerowy-system #181).
+      // Selector FIRST, not selector ONLY: a label such as "#1 item" or ".NET" also starts this
+      // way, so a failed selector click falls through to the name-based strategies below.
+      const looksLikeSelector = /^[#.[]|^(css|xpath|text|id|data-testid)=|^\/\//.test(target);
+      if (looksLikeSelector) {
+        try { const loc = entry.page.locator(target).first(); await stealthMoveToLocator(loc); await loc.click({ timeout: TIMEOUTS.SHORT }); clickedType = "selector"; clicked = true; } catch { void 0; /* not a clickable selector: try it as an accessible name */ }
+      }
+      // Try button role — exact accessible name first. Playwright's default name match is a
+      // case-insensitive substring, so "Anuluj" also matches "Anuluj zlecenie", the locator
+      // resolves to two elements, strict mode throws, and the intended button is never clicked.
+      if (!clicked) { try { const loc = entry.page.getByRole("button", { name: target, exact: true }); await stealthMoveToLocator(loc); await loc.click({ timeout: TIMEOUTS.NAVIGATION }); clickedType = "button"; clicked = true; } catch { void 0; /* selector: try next matching strategy */ } }
+      if (!clicked) { try { const loc = entry.page.getByRole("button", { name: target }); await stealthMoveToLocator(loc); await loc.click({ timeout: TIMEOUTS.NAVIGATION }); clickedType = "button"; clicked = true; } catch { void 0; /* selector: try next matching strategy */ } }
       // Try link role
+      if (!clicked) { try { const loc = entry.page.getByRole("link", { name: target, exact: true }); await stealthMoveToLocator(loc); await loc.click({ timeout: TIMEOUTS.NAVIGATION }); clickedType = "link"; clicked = true; } catch { void 0; /* selector: try next matching strategy */ } }
       if (!clicked) { try { const loc = entry.page.getByRole("link", { name: target }); await stealthMoveToLocator(loc); await loc.click({ timeout: TIMEOUTS.NAVIGATION }); clickedType = "link"; clicked = true; } catch { void 0; /* selector: try next matching strategy */ } }
-      // Try frames
+      // Try child frames (the main frame was already searched above)
       if (!clicked) {
         for (const frame of entry.page.frames()) {
           if (clicked) break;
+          if (frame === entry.page.mainFrame()) continue;
           try { const loc = frame.getByRole("button", { name: target }); await loc.click({ timeout: TIMEOUTS.SETTLE }); clickedType = "button (frame)"; clicked = true; } catch { void 0; /* selector: try next matching strategy */
             try { const loc = frame.getByRole("link", { name: target }); await loc.click({ timeout: TIMEOUTS.SETTLE }); clickedType = "link (frame)"; clicked = true; } catch { void 0; /* selector: try next matching strategy */ }
           }

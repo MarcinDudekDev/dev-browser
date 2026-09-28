@@ -1,4 +1,5 @@
 #!/bin/bash
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/fastpath.sh"
 # Fast path: select via server endpoint (no tsx)
 args="${SCRIPT_ARGS}"
 if [[ -z "$args" ]]; then
@@ -18,7 +19,7 @@ PAGE_ID="${PREFIX}-${PAGE}"
 PORT="${SERVER_PORT}"
 
 body=$(jq -nc --arg target "$target" --arg value "$value" '{target: $target, value: $value}')
-result=$(curl -s -m 10 -X POST "http://localhost:${PORT}/pages/${PAGE_ID}/select" -H 'Content-Type: application/json' -d "$body")
+result=$(fp_post "/pages/${PAGE_ID}/select" "$body" 10) || exit 1
 
 error=$(echo "$result" | jq -r '.error // empty' 2>/dev/null)
 if [[ -n "$error" ]]; then

@@ -1,4 +1,5 @@
 #!/bin/bash
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/fastpath.sh"
 # Fast path: fill via server endpoint (no tsx)
 # Supports:
 #   fill field value             — single field by name
@@ -22,8 +23,10 @@ fill_one() {
     local target="$1" value="$2"
     local body
     body=$(jq -nc --arg target "$target" --arg value "$value" '{target: $target, value: $value}')
-    curl -s -m 10 -X POST "http://localhost:${PORT}/pages/${PAGE_ID}/fill" \
-        -H 'Content-Type: application/json' -d "$body"
+    # A transport failure becomes an explicit error object, so every caller
+    # below counts the field as failed instead of reading an empty reply as
+    # "no .error, so it was filled". fp_post already said why on stderr.
+    fp_post "/pages/${PAGE_ID}/fill" "$body" 10 || echo '{"error":"no reply from server"}'
 }
 
 # JSON mode: fill '{"email":"test@x.com","password":"P@ss=w0rd"}'
@@ -45,7 +48,7 @@ if [[ "$args" == \{* ]]; then
     done
 
     [[ ${#filled[@]} -gt 0 ]] && echo "Filled: $(IFS=', '; echo "${filled[*]}")"
-    [[ ${#failed[@]} -gt 0 ]] && echo "Not found: $(IFS=', '; echo "${failed[*]}")" >&2
+    [[ ${#failed[@]} -gt 0 ]] && echo "Not filled: $(IFS=', '; echo "${failed[*]}")" >&2
     if [[ -n "$last_result" ]]; then
         state=$(echo "$last_result" | jq -r '.state // empty')
         [[ -n "$state" ]] && echo "$state"
@@ -75,7 +78,7 @@ if [[ $kv_count -ge 2 ]]; then
     done <<< "$kv_data"
 
     [[ ${#filled[@]} -gt 0 ]] && echo "Filled: $(IFS=', '; echo "${filled[*]}")"
-    [[ ${#failed[@]} -gt 0 ]] && echo "Not found: $(IFS=', '; echo "${failed[*]}")" >&2
+    [[ ${#failed[@]} -gt 0 ]] && echo "Not filled: $(IFS=', '; echo "${failed[*]}")" >&2
     if [[ -n "$last_result" ]]; then
         state=$(echo "$last_result" | jq -r '.state // empty')
         [[ -n "$state" ]] && echo "$state"

@@ -1,4 +1,5 @@
 #!/bin/bash
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/fastpath.sh"
 # Fast path: click via server endpoint (no tsx, no connectOverCDP)
 # Handles text, ARIA refs (e5), and CSS selectors — all server-side
 target="${SCRIPT_ARGS}"
@@ -18,7 +19,7 @@ if [[ "${FORCE_CLICK:-0}" == "1" ]]; then
 else
     body=$(jq -nc --arg target "$target" '{target: $target}')
 fi
-result=$(curl -s -m 10 -X POST "http://localhost:${PORT}/pages/${PAGE_ID}/click" -H 'Content-Type: application/json' -d "$body")
+result=$(fp_post "/pages/${PAGE_ID}/click" "$body" 45) || exit 1
 
 error=$(echo "$result" | jq -r '.error // empty' 2>/dev/null)
 if [[ -n "$error" ]]; then

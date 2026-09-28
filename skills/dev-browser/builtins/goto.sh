@@ -1,4 +1,5 @@
 #!/bin/bash
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/fastpath.sh"
 # Fast path: goto via server endpoint (no tsx)
 url="${SCRIPT_ARGS}"
 if [[ -z "$url" ]]; then
@@ -41,7 +42,7 @@ if [[ "$create_code" != "200" ]]; then
 fi
 
 body=$(jq -nc --arg url "$url" --argjson cachebust "$cb" '{url: $url, cachebust: $cachebust}')
-result=$(curl -s -m 35 -X POST "http://localhost:${PORT}/pages/${PAGE_ID}/goto" -H 'Content-Type: application/json' -d "$body")
+result=$(fp_post "/pages/${PAGE_ID}/goto" "$body" 45) || exit 1
 
 error=$(echo "$result" | jq -r '.error // empty' 2>/dev/null)
 if [[ -n "$error" ]]; then

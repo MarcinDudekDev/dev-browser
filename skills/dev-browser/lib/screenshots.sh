@@ -79,6 +79,13 @@ cmd_screenshot() {
         return 1
     fi
 
+    # Gate on the artifact, not the reply: an empty reply (curl timeout) has no
+    # .error either, and this used to print "Screenshot saved" for a missing file.
+    if [[ ! -s "$screenshot_path" ]]; then
+        echo "screenshot failed: no file written at ${screenshot_path} (server reply: ${result:0:200})" >&2
+        return 1
+    fi
+
     local url viewport
     url=$(echo "$result" | jq -r '.url // empty' 2>/dev/null)
     viewport=$(echo "$result" | jq -r '.viewport // empty' 2>/dev/null)
@@ -147,6 +154,7 @@ cmd_responsive() {
         shot_body=$(jq -nc --arg path "$shot_path" '{path: $path, fullPage: true}')
         curl -s -m 35 -X POST "http://localhost:${SERVER_PORT}/pages/${encoded_name}/screenshot" \
             -H "Content-Type: application/json" -d "$shot_body" >/dev/null
+        [[ -s "$shot_path" ]] || { status_label="${status_label}, NO SCREENSHOT"; shot_path="(not written)"; }
 
         printf "%-8s (%spx): %s -> %s\n" "$bp_name" "$bp_w" "$status_label" "$shot_path"
         resize_screenshot "$shot_path" 2>/dev/null

@@ -106,7 +106,7 @@ DIAGNOSTICS
 OUTPUT FORMATS
     goto       -> URL: <url> / Title: <title> / <pageState>
     click      -> Clicked <type>: <target> / URL: ... / Title: ... / <pageState>
-    fill       -> Filled: f1, f2 / <pageState>  |  Not found: f (stderr, exit 1)
+    fill       -> Filled: f1, f2 / <pageState>  |  Not filled: f (stderr, exit 1)
     screenshot -> Screenshot saved: /full/path/to/file.png
     inspect    -> Forms + ARIA refs (e1, e2, ... for use with click/text)
 

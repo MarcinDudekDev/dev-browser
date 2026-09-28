@@ -1,4 +1,5 @@
 #!/bin/bash
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/fastpath.sh"
 # Fast path: inject cookies from Cookie Bridge into dev-browser's Playwright context
 # Usage: dev-browser.sh inject-cookies <domain> [cookie-bridge-port]
 # Fetches cookies from Cookie Bridge /cookies endpoint, injects via Playwright addCookies(),
@@ -46,9 +47,7 @@ fi
 cookies_json=$(printf '%s' "$cb_result" | jq -c '.cookies // []' 2>/dev/null)
 cb_assert_cookies_alive "$domain" "$cb_port" "$cookies_json"
 
-inject_result=$(curl -s -m 10 -X POST "http://localhost:${PORT}/cookies" \
-    -H "Content-Type: application/json" \
-    -d "{\"cookies\":${cookies_json}}")
+inject_result=$(fp_post "/cookies" "{\"cookies\":${cookies_json}}" 10) || exit 1
 
 inject_error=$(echo "$inject_result" | jq -r '.error // empty' 2>/dev/null)
 if [[ -n "$inject_error" ]]; then
@@ -59,9 +58,11 @@ fi
 echo "Injected ${cookie_count} cookies for ${domain}"
 
 # 3. Reload the page so the SPA picks up the session cookies
-reload_result=$(curl -s -m 10 -X POST "http://localhost:${PORT}/pages/${PAGE_ID}/evaluate" \
-    -H "Content-Type: application/json" \
-    -d '{"code":"location.reload()"}')
+reload_result=$(fp_post "/pages/${PAGE_ID}/evaluate" '{"code":"location.reload()"}' 10) || exit 1
+if [[ "$(jq -r '.success // false' <<<"$reload_result")" != "true" ]]; then
+    echo "inject-cookies: cookies injected but page reload failed: $(jq -r '.error // "unknown"' <<<"$reload_result")" >&2
+    exit 1
+fi
 
 echo "Page reloaded — check if auth session is active"
 

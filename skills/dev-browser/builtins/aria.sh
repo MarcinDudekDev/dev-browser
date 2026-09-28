@@ -1,11 +1,12 @@
 #!/bin/bash
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/fastpath.sh"
 # Fast path: ARIA snapshot via server endpoint (no tsx/CDP reconnection)
 PREFIX="${PROJECT_PREFIX:-dev}"
 PAGE="${PAGE_NAME:-main}"
 PAGE_ID="${PREFIX}-${PAGE}"
 PORT="${SERVER_PORT}"
 
-result=$(curl -s -m 15 -X POST "http://localhost:${PORT}/pages/${PAGE_ID}/aria" -H 'Content-Type: application/json' -d '{}')
+result=$(fp_post "/pages/${PAGE_ID}/aria" '{}' 35) || exit 1
 
 error=$(echo "$result" | jq -r '.error // empty' 2>/dev/null)
 if [[ -n "$error" ]]; then

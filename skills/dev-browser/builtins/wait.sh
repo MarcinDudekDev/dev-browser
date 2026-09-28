@@ -1,4 +1,5 @@
 #!/bin/bash
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/fastpath.sh"
 # Fast path: wait for selector/text via server endpoint (no tsx, no connectOverCDP)
 target="${SCRIPT_ARGS}"
 if [[ -z "$target" ]]; then
@@ -12,7 +13,7 @@ PAGE_ID="${PREFIX}-${PAGE}"
 PORT="${SERVER_PORT}"
 
 body=$(jq -nc --arg target "$target" '{target: $target}')
-result=$(curl -s -m 35 -X POST "http://localhost:${PORT}/pages/${PAGE_ID}/wait" -H 'Content-Type: application/json' -d "$body")
+result=$(fp_post "/pages/${PAGE_ID}/wait" "$body" 65) || exit 1
 
 error=$(echo "$result" | jq -r '.error // empty' 2>/dev/null)
 if [[ -n "$error" ]]; then

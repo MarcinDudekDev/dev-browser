@@ -1,4 +1,5 @@
 #!/bin/bash
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/fastpath.sh"
 # Fast path: upload file via server endpoint (no tsx, no connectOverCDP)
 # Handles CSS selectors, ARIA refs (e5), and name attributes — all server-side
 args="${SCRIPT_ARGS}"
@@ -26,7 +27,7 @@ PAGE_ID="${PREFIX}-${PAGE}"
 PORT="${SERVER_PORT}"
 
 body=$(jq -nc --arg target "$target" --arg filepath "$filepath" '{target: $target, filepath: $filepath}')
-result=$(curl -s -m 30 -X POST "http://localhost:${PORT}/pages/${PAGE_ID}/upload" -H 'Content-Type: application/json' -d "$body")
+result=$(fp_post "/pages/${PAGE_ID}/upload" "$body" 30) || exit 1
 
 error=$(echo "$result" | jq -r '.error // empty' 2>/dev/null)
 if [[ -n "$error" ]]; then

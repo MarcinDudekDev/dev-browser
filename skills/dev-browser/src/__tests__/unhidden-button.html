@@ -1,0 +1,13 @@
+<!doctype html>
+<html><head><title>Unhidden Button</title></head><body>
+<!-- asrowerowy-system #181: a button that turns visible after load, next to a
+     button whose accessible name CONTAINS its name. -->
+<button id="other">Anuluj zlecenie</button>
+<button id="x" hidden>Anuluj</button>
+<button id="hash">#2 zlecenie</button>
+<script>
+  window.__log = [];
+  document.addEventListener('click', (e) => window.__log.push(e.target.id), true);
+  setTimeout(() => { document.getElementById('x').hidden = false; }, 100);
+</script>
+</body></html>

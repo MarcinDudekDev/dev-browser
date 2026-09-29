@@ -395,7 +395,9 @@ _kill_cdp_browser() {
     local port="$1"
     [[ -z "$port" ]] && return
     local browser_pid
-    browser_pid=$(pgrep -f "remote-debugging-port=${port}" 2>/dev/null | head -1)
+    # Anchor the pattern: an unanchored "remote-debugging-port=9221" also
+    # substring-matches 92215 (review 2026-09-29). pgrep -f uses ERE.
+    browser_pid=$(pgrep -f "remote-debugging-port=${port}( |$)" 2>/dev/null | head -1)
     if [[ -n "$browser_pid" ]]; then
         log_debug "Killing orphaned browser on CDP port $port (PID $browser_pid)"
         echo "  Killing orphaned browser (PID $browser_pid on port $port)..." >&2
@@ -404,10 +406,29 @@ _kill_cdp_browser() {
         kill -0 "$browser_pid" 2>/dev/null && kill -9 "$browser_pid" 2>/dev/null
     fi
 
-    # Clean up SingletonLock files left behind by force-killed Chromium
-    # Without this, next launch fails with "profile already in use"
+    # Clean up SingletonLock files left behind by force-killed Chromium — but
+    # ONLY when the pid the lock names is actually dead. The old code rm -f'd
+    # every profile's lock unconditionally, which measured live (2026-09-29):
+    # a still-running stealth Chrome lost its SingletonLock to a dev-mode
+    # _kill_cdp_browser, and the next launch saw "no lock" and spawned a
+    # duplicate on the in-use profile. A live pid in the target means the
+    # owner may still be there — leave its lock alone.
     for mode_dir in "$DEV_BROWSER_HOME"/profiles/*/browser-data; do
-        [[ -f "$mode_dir/SingletonLock" ]] && rm -f "$mode_dir/SingletonLock" && log_debug "Removed stale SingletonLock in $mode_dir"
+        local lock="$mode_dir/SingletonLock"
+        # -e misses a DANGLING symlink, and Chrome's lock target ("host-pid")
+        # is never a real file — test the link itself with -L too.
+        [[ -e "$lock" || -L "$lock" ]] || continue
+        local target lock_pid
+        target=$(readlink "$lock" 2>/dev/null)
+        [[ -z "$target" ]] && target=$(cat "$lock" 2>/dev/null)
+        # Lock format is "<hostname>-<pid>"; hostnames carry dashes, so the
+        # pid is after the LAST dash.
+        lock_pid="${target##*-}"
+        if [[ "$lock_pid" =~ ^[0-9]+$ ]] && kill -0 "$lock_pid" 2>/dev/null; then
+            log_debug "Leaving SingletonLock in $mode_dir — owner pid $lock_pid still alive"
+        else
+            rm -f "$lock" && log_debug "Removed stale SingletonLock in $mode_dir (owner pid ${lock_pid:-?} dead or unparseable)"
+        fi
     done
 }
 

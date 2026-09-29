@@ -1,4 +1,5 @@
 import { serve } from "@/index.js";
+import { freeCdpPort } from "@/chrome-profile.js";
 import { execSync } from "child_process";
 import { mkdirSync, existsSync, readdirSync, appendFileSync, writeFileSync, readFileSync } from "fs";
 import { join, dirname } from "path";
@@ -147,21 +148,16 @@ try {
 // (9222), and killing it would close all their tabs. Only own dev/stealth
 // Chromium instances are ours to reclaim.
 if ((process.env.BROWSER_MODE || "dev") !== "user") {
-  // Use netstat (fast) instead of lsof (hangs on macOS)
+  // Same policy serve() applies (2026-09-29): SIGKILL only listeners whose argv
+  // carries BOTH our --remote-debugging-port and our exact --user-data-dir, and
+  // REFUSE on a foreign holder rather than launching into a held port — the old
+  // `kill -9 $(fuser PORT/tcp)` was a no-op on macOS (its fuser lacks the port
+  // syntax), so the port stayed held and the spawn attached to a stale browser.
   try {
-    const listening = execSync(
-      `netstat -anp tcp 2>/dev/null | grep '\\.${startupCdpPort} ' | grep LISTEN`,
-      { encoding: "utf-8", timeout: 3000 }
-    ).trim();
-    if (listening) {
-      console.log(`Stale process detected on CDP port ${startupCdpPort}, attempting cleanup...`);
-      // Try to kill via fuser (available on most systems) as lsof hangs on macOS
-      try {
-        execSync(`kill -9 $(fuser ${startupCdpPort}/tcp 2>/dev/null) 2>/dev/null`, { timeout: 3000 });
-      } catch { /* best effort */ }
-    }
-  } catch {
-    // No process on CDP port — expected
+    await freeCdpPort(startupCdpPort, join(profileDir, "browser-data"));
+  } catch (err) {
+    logCrash(`Startup refused: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
   }
 }
 

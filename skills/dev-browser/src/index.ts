@@ -1,6 +1,6 @@
 import express, { type Express, type Request, type Response, type NextFunction } from "express";
 import { chromium, type Browser, type BrowserContext, type CDPSession, type Page } from "playwright";
-import { mkdirSync, existsSync, readFileSync, writeFileSync, rmSync } from "fs";
+import { mkdirSync, existsSync, readFileSync, writeFileSync } from "fs";
 import { execFile, spawn, type ChildProcess } from "child_process";
 import { join, isAbsolute, resolve } from "path";
 import type { Socket } from "net";
@@ -15,6 +15,7 @@ import { humanMouseMove, getElementCenter, startIdleMovement, stopIdleMovement }
 import { resolveField, smartFill } from "./resolve-field.js";
 import { getSnapshotScript } from "./snapshot/browser-script";
 import { CDPConnection, makeUserContext } from "./cdp-page.js";
+import { freeCdpPort, resolveSingletonLock } from "./chrome-profile.js";
 
 export type { ServeOptions, GetPageResponse, ListPagesResponse, ServerInfoResponse };
 
@@ -320,7 +321,7 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
   let quietChild: ChildProcess | null = null;
 
   async function launchQuietly(): Promise<void> {
-    quietChild = spawn(chromium.executablePath(), [
+    const child = spawn(chromium.executablePath(), [
       "--no-startup-window",
       `--remote-debugging-port=${cdpPort}`,
       `--user-data-dir=${userDataDir}`,
@@ -335,13 +336,95 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
       "--disable-renderer-backgrounding",
       ...(browserMode === "stealth" ? ["--disable-blink-features=AutomationControlled"] : []),
     ], { stdio: "ignore" });
-    const response = await fetchWithRetry(`http://127.0.0.1:${cdpPort}/json/version`, 30, 100);
+    quietChild = child;
+    // A spawn 'error' (e.g. ENOENT on a missing Chromium binary) with no
+    // listener is an uncaught exception that crashes the whole server — race it
+    // against the endpoint probe so it becomes a clean launch failure instead
+    // (review 2026-09-29).
+    const spawnError = new Promise<never>((_: unknown, reject: (reason: Error) => void): void => {
+      child.once("error", reject);
+    });
+    // If the spawn succeeds the error never fires and this rejection must not
+    // linger as an unhandled rejection.
+    void spawnError.catch((): void => { void 0; });
+    const response = await Promise.race([
+      fetchWithRetry(`http://127.0.0.1:${cdpPort}/json/version`, 30, 100),
+      spawnError,
+    ]);
     const cdpInfo = (await response.json()) as { webSocketDebuggerUrl: string };
     wsEndpoint = cdpInfo.webSocketDebuggerUrl;
     quietBrowser = await chromium.connectOverCDP(wsEndpoint);
+    // If our child already exited, the endpoint that answered belongs to a
+    // DIFFERENT browser — the old Chrome can hold 127.0.0.1 while a relaunched
+    // one only binds ::1, so a fetch on 127.0.0.1 silently attaches to the
+    // stale browser and orphans ours (the 2026-09-29 duplicate-Chrome bug).
+    // exitCode alone cannot see the collision: Chrome stays ALIVE when its
+    // port is taken (measured 2026-09-29, binds ::1 while the old browser
+    // keeps 127.0.0.1), so the identity check below is the real guard.
+    if (child.exitCode !== null || child.signalCode !== null) {
+      const foreign = quietBrowser;
+      quietBrowser = null;
+      try { await foreign.close(); } catch { void 0; /* close() on a CDP attach only disconnects — the foreign browser keeps running */ }
+      console.error(`REFUSING foreign attach on CDP port ${cdpPort}: spawned Chromium exited (code ${child.exitCode ?? child.signalCode}) before attach`);
+      throw new Error(
+        `Quiet launch: spawned Chromium exited (code ${child.exitCode ?? child.signalCode}) before attach — ` +
+        `port ${cdpPort} is served by another browser, refusing to attach to it`,
+      );
+    }
+    await verifyAttachedBrowserIsOurs(quietBrowser, child);
     const defaultContext = quietBrowser.contexts()[0];
     if (!defaultContext) throw new Error("Quiet launch: attached browser has no default context");
     context = defaultContext;
+  }
+
+  // The endpoint that answered connectOverCDP may belong to a DIFFERENT
+  // browser than the child we spawned — that is exactly how the 2026-09-29
+  // duplicate-Chromium incident worked: child bound ::1 while the stale
+  // browser kept 127.0.0.1, and fetch/connect on 127.0.0.1 attached us to the
+  // stale one. Verify identity: SystemInfo.getProcessInfo must name our
+  // child's pid as the "browser" process. On a definitive mismatch: disconnect
+  // (close() only detaches on a CDP attach), SIGKILL our orphaned child so it
+  // can't claim the profile later, and refuse.
+  async function verifyAttachedBrowserIsOurs(browser: Browser, child: ChildProcess): Promise<void> {
+    // tri-state: true = proven ours, false = proven foreign, null = couldn't tell
+    let ours: boolean | null = null;
+    try {
+      const session = await browser.newBrowserCDPSession();
+      try {
+        const { processInfo } = await session.send("SystemInfo.getProcessInfo");
+        const browserProc = processInfo.find((p): boolean => p.type === "browser");
+        if (browserProc) ours = browserProc.id === child.pid;
+      } finally {
+        try { await session.detach(); } catch { void 0; /* browser may be gone */ }
+      }
+    } catch { void 0; /* method unsupported or session failed — fall back below */ }
+
+    if (ours === null) {
+      // Fallback: compare the browser GUID each stack serves on /json/version.
+      // The port-collision shape is child-on-::1 + foreign-on-127.0.0.1; a
+      // DIFFERENT guid behind [::1] than behind 127.0.0.1 proves the split.
+      const guidOn = async (host: string): Promise<string | null> => {
+        try {
+          const r = await fetch(`http://${host}:${cdpPort}/json/version`, { signal: AbortSignal.timeout(1500) });
+          const j = (await r.json()) as { webSocketDebuggerUrl?: string };
+          return j.webSocketDebuggerUrl?.split("/devtools/browser/")[1] ?? null;
+        } catch { return null; }
+      };
+      const [v4, v6] = await Promise.all([guidOn("127.0.0.1"), guidOn("[::1]")]);
+      if (v4 !== null && v6 !== null && v4 !== v6) ours = false;
+    }
+
+    if (ours === false) {
+      console.error(`REFUSING foreign attach on CDP port ${cdpPort}: attached browser is not our spawned child (pid ${child.pid ?? "?"})`);
+      try { await browser.close(); } catch { void 0; /* disconnect only */ }
+      try { child.kill("SIGKILL"); } catch { void 0; /* orphan already gone */ }
+      quietBrowser = null;
+      quietChild = null;
+      throw new Error(
+        `Quiet launch refused: CDP port ${cdpPort} answered from a browser that is not our spawned child ` +
+        `(pid ${child.pid ?? "?"}) — a foreign/stale browser holds the port`,
+      );
+    }
   }
 
   // Stops the quietly launched Chromium — connectOverCDP's close() only disconnects.
@@ -366,12 +449,23 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
   async function launchBrowserContext(): Promise<void> {
     if (browserMode !== "user") {
       mkdirSync(userDataDir, { recursive: true });
+      // Resolve the profile lock and CDP port BEFORE touching the profile at
+      // all — fixChromePreferences used to run first and rewrote a foreign
+      // owner's Preferences on the refuse paths (review SHOULD-FIX 7).
+      //
+      // resolveSingletonLock (2026-09-29, round 2): stale-lock policy with no
+      // permanent-wedge outcome. Lock naming another hostname, a dead pid, or
+      // a live pid whose argv lacks our exact --user-data-dir (recycled pid —
+      // the old code threw on that forever) is stale and gets cleared. Only an
+      // owner provably carrying our --user-data-dir gets killed.
+      await resolveSingletonLock(userDataDir);
+      // freeCdpPort: SIGKILL only listeners whose argv carries BOTH our
+      // --remote-debugging-port and our exact --user-data-dir; a foreign
+      // holder refuses the launch with a clear error instead of letting us
+      // spawn into a held port and attach to the wrong browser (BLOCKER 2).
+      // Runs on first start AND on relaunch via ensureContext.
+      await freeCdpPort(cdpPort, userDataDir);
       fixChromePreferences(userDataDir);
-      // Clear stale Singleton locks left by a crashed Chromium — otherwise
-      // launchPersistentContext fails/hangs with "profile appears to be in use".
-      for (const lock of ["SingletonLock", "SingletonCookie", "SingletonSocket"]) {
-        try { rmSync(join(userDataDir, lock), { force: true }); } catch { void 0; }
-      }
       if (quietLaunch) {
         console.log("Launching browser quietly (no startup window, background tabs)...");
         await launchQuietly();
@@ -399,8 +493,18 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
   }
 
   // Check if context is alive; if dead, kill stale Chrome and relaunch (dev/stealth only)
-  async function ensureContext(): Promise<void> {
-    if (browserMode === "user") return;
+  // Single-flight (review NIT, 2026-09-29): two concurrent requests used to run
+  // the relaunch in parallel, and the port/lock kills made each one murder the
+  // other's fresh Chrome. Every concurrent caller now awaits the FIRST
+  // caller's relaunch promise; a caller arriving after it settles re-checks
+  // and (normally) finds a healthy context.
+  let relaunchInFlight: Promise<void> | null = null;
+  function ensureContext(): Promise<void> {
+    if (browserMode === "user") return Promise.resolve();
+    relaunchInFlight ??= ensureContextOnce().finally((): void => { relaunchInFlight = null; });
+    return relaunchInFlight;
+  }
+  async function ensureContextOnce(): Promise<void> {
     try {
       // Quick liveness check — if context is closed this throws. A CDP-attached
       // context survives its browser's death, so ask the connection too.
@@ -409,13 +513,16 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     } catch { void 0; /* best-effort: browser context dead, relaunching below */
       console.log("Browser context is dead — relaunching...");
       registry.clear();
-      // Kill stale Chrome processes holding CDP port before relaunch
-      try {
-        const { execSync } = await import("child_process");
-        // Use fuser instead of lsof (lsof hangs on macOS)
-        execSync(`kill -9 $(fuser ${cdpPort}/tcp 2>/dev/null) 2>/dev/null`, { stdio: "ignore", timeout: TIMEOUTS.SHORT });
-        await new Promise<void>((resolve: () => void): void => { setTimeout(resolve, TIMEOUTS.STALE_PROCESS_KILL); });
-      } catch { void 0; /* cleanup: no stale processes to kill */ }
+      // Kill our tracked stale child, then free the CDP port — the old
+      // `kill -9 $(fuser PORT/tcp)` never worked on macOS (its fuser has no
+      // port syntax), the old Chrome kept the port, and the relaunch became a
+      // DUPLICATE browser on the same profile (measured 2026-09-29).
+      // freeCdpPort only SIGKILLs listeners whose argv carries our exact
+      // --remote-debugging-port AND --user-data-dir; a foreign holder refuses
+      // instead of letting us attach to it, and a port we cannot probe is
+      // treated as held until the deadline rather than read as free.
+      try { quietChild?.kill("SIGKILL"); } catch { void 0; /* child already gone */ }
+      await freeCdpPort(cdpPort, userDataDir);
       await launchBrowserContext();
       // Verify the relaunched browser is actually functional before declaring
       // success — never advertise "ready" with a dead/zero-process context.

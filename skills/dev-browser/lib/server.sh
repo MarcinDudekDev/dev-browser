@@ -210,7 +210,7 @@ start_server() {
 
     # Kill any orphaned Chrome holding the CDP port (handles dead server + live browser)
     if [[ "$mode" != "user" ]]; then
-        _kill_cdp_browser "$CDP_PORT"
+        _kill_cdp_browser "$CDP_PORT" "$mode"
     fi
 
     echo "Starting dev-browser server (mode: $mode, port: $SERVER_PORT)..." >&2
@@ -351,7 +351,7 @@ stop_server() {
             fi
             # Kill orphaned Chromium on this mode's CDP port (not for user mode)
             if [[ "$m" != "user" ]]; then
-                _kill_cdp_browser "$CDP_PORT"
+                _kill_cdp_browser "$CDP_PORT" "$m"
             fi
         done
         pkill -f "start-server.ts" 2>/dev/null
@@ -381,29 +381,57 @@ stop_server() {
         done
         # Kill orphaned Chromium on this mode's CDP port (not for user mode)
         if [[ "$mode" != "user" ]]; then
-            _kill_cdp_browser "$CDP_PORT"
+            _kill_cdp_browser "$CDP_PORT" "$mode"
         fi
         log_debug "Server stopped"
         echo "Server stopped" >&2
     fi
 }
 
-# Kill Chromium process launched with a specific CDP port (cleanup orphans after server stop)
+# Kill Chromium processes launched with a specific CDP port (cleanup orphans after server stop)
 # Finds Chrome by its --remote-debugging-port arg — no lsof (hangs on macOS) or fuser (missing on macOS)
 # Also removes SingletonLock to prevent "profile already in use" errors on next launch
+#
+# Only OUR browser processes are killed (issue #4, 2026-09-29): the pgrep
+# pattern matches browser + helpers alike (measured live: 3 pids per Chrome —
+# helpers inherit both --remote-debugging-port and --user-data-dir), and the
+# old `| head -1` kept whichever pid sorted first, which could be a renderer —
+# killing a helper leaves the real browser orphaned on the port. Worse, a
+# FOREIGN-profile Chrome on the same port was SIGKILLed outright. So: match
+# every pid, keep only argv carrying THIS mode's --user-data-dir as a whole
+# argument with no --type= (helpers alone carry --type=), kill all of those,
+# and never touch anything else.
 _kill_cdp_browser() {
     local port="$1"
     [[ -z "$port" ]] && return
-    local browser_pid
+    # Mode selects which profile dir is "ours". Callers pass it explicitly:
+    # stop_server --all iterates modes via set_mode_vars but BROWSER_MODE stays
+    # pinned to the outer mode, so the env alone cannot be trusted here.
+    local mode="${2:-${BROWSER_MODE:-dev}}"
+    local dir_arg="--user-data-dir=$DEV_BROWSER_HOME/profiles/$mode/browser-data"
+    local pid cmd
+    local -a ours=()
     # Anchor the pattern: an unanchored "remote-debugging-port=9221" also
     # substring-matches 92215 (review 2026-09-29). pgrep -f uses ERE.
-    browser_pid=$(pgrep -f "remote-debugging-port=${port}( |$)" 2>/dev/null | head -1)
-    if [[ -n "$browser_pid" ]]; then
-        log_debug "Killing orphaned browser on CDP port $port (PID $browser_pid)"
-        echo "  Killing orphaned browser (PID $browser_pid on port $port)..." >&2
-        kill "$browser_pid" 2>/dev/null
+    for pid in $(pgrep -f "remote-debugging-port=${port}( |$)" 2>/dev/null); do
+        cmd=$(ps -o command= -p "$pid" 2>/dev/null)
+        # Whole-argument match: pad both sides with spaces so the arg must be
+        # bounded by whitespace — browser-data must not match a longer
+        # browser-data-backup (same rule as argvContainsArg on the node side).
+        if [[ " $cmd " == *" $dir_arg "* && " $cmd " != *" --type="* ]]; then
+            ours+=("$pid")
+        else
+            log_debug "_kill_cdp_browser: pid $pid on port $port is not ours (no '$dir_arg', or has --type=) — leaving it alone"
+        fi
+    done
+    if [[ ${#ours[@]} -gt 0 ]]; then
+        log_debug "Killing orphaned browser on CDP port $port (PIDs ${ours[*]})"
+        echo "  Killing orphaned browser (PIDs ${ours[*]} on port $port)..." >&2
+        kill "${ours[@]}" 2>/dev/null
         sleep 0.5
-        kill -0 "$browser_pid" 2>/dev/null && kill -9 "$browser_pid" 2>/dev/null
+        for pid in "${ours[@]}"; do
+            kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null
+        done
     fi
 
     # Clean up SingletonLock files left behind by force-killed Chromium — but

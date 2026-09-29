@@ -11,7 +11,7 @@ import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   argvContainsArg,
-  clearStaleSingletonLocks,
+  argvContainsArgPrefix,
   freeCdpPort,
   isPidAlive,
   parseFuserPids,
@@ -124,67 +124,6 @@ describe("isPidAlive", () => {
   });
 });
 
-describe("clearStaleSingletonLocks", () => {
-  /** Create all three Singleton* markers with the lock owned by `pid`. */
-  function makeLocks(dir: string, pid: number): void {
-    symlinkSync(`test-host-${pid}`, join(dir, "SingletonLock"));
-    writeFileSync(join(dir, "SingletonCookie"), "cookie");
-    writeFileSync(join(dir, "SingletonSocket"), "socket");
-  }
-
-  // existsSync follows symlinks and the lock's target ("host-pid") does not
-  // exist on disk — a dangling symlink would falsely read as absent. lstatSync
-  // answers "is the MARKER there", which is what survives-or-not means here.
-  function entryExists(path: string): boolean {
-    try {
-      lstatSync(path);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  test("keeps every marker when the lock owner is still alive", () => {
-    const dir = tmpProfile();
-    try {
-      makeLocks(dir, process.pid);
-      const result = clearStaleSingletonLocks(dir);
-      assert.deepStrictEqual(result, { cleared: false, ownerPid: process.pid });
-      for (const lock of ["SingletonLock", "SingletonCookie", "SingletonSocket"]) {
-        assert.ok(entryExists(join(dir, lock)), `${lock} must survive while its owner is alive`);
-      }
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("removes all three markers when the owner is dead", () => {
-    const dir = tmpProfile();
-    try {
-      makeLocks(dir, DEAD_PID);
-      const result = clearStaleSingletonLocks(dir);
-      assert.deepStrictEqual(result, { cleared: true, ownerPid: DEAD_PID });
-      for (const lock of ["SingletonLock", "SingletonCookie", "SingletonSocket"]) {
-        assert.ok(!entryExists(join(dir, lock)), `${lock} must be cleared once its owner is gone`);
-      }
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("clears when no lock exists at all", () => {
-    const dir = tmpProfile();
-    try {
-      writeFileSync(join(dir, "SingletonCookie"), "cookie");
-      const result = clearStaleSingletonLocks(dir);
-      assert.deepStrictEqual(result, { cleared: true, ownerPid: null });
-      assert.ok(!entryExists(join(dir, "SingletonCookie")));
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-});
-
 describe("argvContainsArg", () => {
   const CHROME = "/opt/chrome/chrome --remote-debugging-port=9225 --user-data-dir=/x/browser-data --no-first-run";
 
@@ -215,6 +154,23 @@ describe("argvContainsArg", () => {
   });
 });
 
+describe("argvContainsArgPrefix", () => {
+  // --type= is how a Chrome helper (renderer/GPU/utility) is recognized —
+  // its value is open, so the test is word-START, not whole-arg (issue #4).
+  const RENDERER = "/opt/chrome/chrome --type=renderer --remote-debugging-port=9225 --user-data-dir=/x/browser-data";
+
+  test("matches a --flag=value arg by prefix, value open", () => {
+    assert.strictEqual(argvContainsArgPrefix(RENDERER, "--type="), true);
+    assert.strictEqual(argvContainsArgPrefix(RENDERER, "--type=renderer"), true);
+    assert.strictEqual(argvContainsArgPrefix("--type=gpu-process /x", "--type="), true);
+  });
+
+  test("does NOT match a flag that merely CONTAINS the string", () => {
+    assert.strictEqual(argvContainsArgPrefix("chrome --suspect-type=x", "--type="), false);
+    assert.strictEqual(argvContainsArgPrefix("chrome --user-data-dir=/x", "--type="), false);
+  });
+});
+
 describe("parseSsListenPids (Linux ss -ltnp)", () => {
   const SS_OUT = `State  Recv-Q Send-Q Local Address:Port Peer Address:Port Process
 LISTEN 0      4096   127.0.0.1:9225      0.0.0.0:*    users:(("chrome",pid=39885,fd=131))
@@ -225,6 +181,30 @@ LISTEN 0      4096   127.0.0.1:19225     0.0.0.0:*    users:(("nginx",pid=11111,
   test("parses pids from the users:(pid=N) tail, both stacks", () => {
     assert.deepStrictEqual(parseSsListenPids(SS_OUT, 9225).sort(), [39885, 44546]);
     assert.deepStrictEqual(parseSsListenPids(SS_OUT, 19225), [11111]);
+  });
+
+  // ss variants that prepend a Netid column shift the local address from
+  // fields[3] to fields[4] — a hard-coded index parses [] there and reads as
+  // "port free" (issue #4 nit). The column is located via the header.
+  const SS_OUT_NETID = `Netid State  Recv-Q Send-Q Local Address:Port Peer Address:Port Process
+tcp   LISTEN 0      4096   127.0.0.1:9225      0.0.0.0:*    users:(("chrome",pid=39885,fd=131))
+tcp   LISTEN 0      4096       [::1]:9225         [::]:*    users:(("chrome",pid=44546,fd=130))
+udp   UNCONN 0      0      127.0.0.1:9225      0.0.0.0:*    users:(("dnsmasq",pid=7777,fd=5))
+`;
+
+  test("a leading Netid column is handled — local address found via the header", () => {
+    assert.deepStrictEqual(parseSsListenPids(SS_OUT_NETID, 9225).sort(), [39885, 44546]);
+  });
+
+  test("no header at all still parses — local address found by its :port shape", () => {
+    const headless = `LISTEN 0      4096   127.0.0.1:9225      0.0.0.0:*    users:(("chrome",pid=39885,fd=131))
+`;
+    assert.deepStrictEqual(parseSsListenPids(headless, 9225), [39885]);
+  });
+
+  test("a non-LISTEN row on the same port is ignored — its pid is not the listener", () => {
+    const pids = parseSsListenPids(SS_OUT_NETID, 9225);
+    assert.ok(!pids.includes(7777), "the UDP UNCONN row must not be treated as a TCP listener");
   });
 });
 
@@ -291,6 +271,29 @@ describe("resolveSingletonLock", () => {
     }
   });
 
+  // Replaces the removed clearStaleSingletonLocks coverage (issue #4 nit):
+  // a dead/absent owner means the markers are leftovers — cleared, nothing killed.
+  test("lock owner already DEAD => all markers cleared, no kill, no throw", async () => {
+    const dir = tmpProfile();
+    try {
+      makeLock(dir, `${hostname()}-${DEAD_PID}`);
+      writeFileSync(join(dir, "SingletonSocket"), "socket");
+      let killed = -1;
+      await resolveSingletonLock(dir, {
+        kill: (pid) => { killed = pid; },
+        sleep: noop,
+      });
+      assert.strictEqual(killed, -1, "a dead owner must never be killed");
+      for (const lock of ["SingletonLock", "SingletonCookie", "SingletonSocket"]) {
+        let stillThere = true;
+        try { lstatSync(join(dir, lock)); } catch { stillThere = false; }
+        assert.strictEqual(stillThere, false, `${lock} must be cleared once its owner is gone`);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   // Same BLOCKER-1 case but where ps cannot even be read — unreadable argv can
   // never prove our ownership, so the lock is stale, not a refusal.
   test("live owner with UNREADABLE argv => stale, cleared, no throw", async () => {
@@ -338,6 +341,26 @@ describe("resolveSingletonLock", () => {
       });
       assert.deepStrictEqual(killed, [777]);
       assert.strictEqual(lockExists(dir), false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Issue #4 SHOULD-FIX 6: a --type= in argv marks a Chrome HELPER (renderer/
+  // GPU/utility), which inherits our --user-data-dir but is never the browser.
+  // A lock pid that is a helper is a recycled pid — clear, do not kill.
+  test("lock owner whose argv carries --type= is a helper, not our browser => stale, cleared, NO kill", async () => {
+    const dir = tmpProfile();
+    try {
+      makeLock(dir, `${hostname()}-${process.pid}`);
+      let killed = -1;
+      await resolveSingletonLock(dir, {
+        argvOf: () => `/opt/chrome/chrome --type=renderer --remote-debugging-port=9225 --user-data-dir=${dir}`,
+        kill: (pid) => { killed = pid; },
+        sleep: noop,
+      });
+      assert.strictEqual(killed, -1, "a helper pid must never be killed — it is a recycled lock owner");
+      assert.strictEqual(lockExists(dir), false, "the stale lock is still cleared");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -404,6 +427,7 @@ describe("freeCdpPort", () => {
       freeCdpPort(PORT, DIR, {
         listPids: () => [4242],
         argvOf: () => `/opt/chrome/chrome --remote-debugging-port=${PORT} --user-data-dir=/x/browser-data-backup`,
+        isAlive: () => true,   // a live foreign pid; without this the fake pid is dead → skipped, not refused
         kill: (pid) => { killed = pid; },
         sleep: noop,
       }),
@@ -417,10 +441,66 @@ describe("freeCdpPort", () => {
       freeCdpPort(PORT, DIR, {
         listPids: () => [4242],
         argvOf: () => "/usr/sbin/nginx -g daemon off;",
+        isAlive: () => true,
         sleep: noop,
       }),
       /foreign pid 4242/,
     );
+  });
+
+  // Issue #4 SHOULD-FIX 4: a pid that died between the netstat snapshot and
+  // our classification is not a holder — its socket is released or closing.
+  // Skipping beats a false REFUSING on a transient teardown state.
+  test("a listener pid that already EXITED is skipped, not refused — port free on next probe", async () => {
+    let calls = 0;
+    let killed = -1;
+    await freeCdpPort(PORT, DIR, {
+      listPids: () => (++calls === 1 ? [4242] : []),
+      argvOf: () => "",                 // ps on a dead pid reads empty
+      isAlive: () => false,             // ...because it is dead
+      kill: (pid) => { killed = pid; },
+      sleep: noop,
+    });
+    assert.strictEqual(killed, -1, "a dead pid is neither killed nor refused");
+  });
+
+  test("a LIVE pid with unreadable argv is still foreign => refuse", async () => {
+    await assert.rejects(
+      freeCdpPort(PORT, DIR, {
+        listPids: () => [4242],
+        argvOf: () => "",
+        isAlive: () => true,            // alive but argv unreadable — cannot prove ours
+        sleep: noop,
+      }),
+      /foreign pid 4242.*argv unreadable/,
+    );
+  });
+
+  // Issue #4 SHOULD-FIX 6: --type= marks a Chrome helper. Helpers inherit both
+  // flags but are never the browser process — never ours to kill.
+  test("a listener whose argv carries --type= (helper) is NOT ours => alive => refuse, no kill", async () => {
+    let killed = -1;
+    await assert.rejects(
+      freeCdpPort(PORT, DIR, {
+        listPids: () => [4242],
+        argvOf: () => `/opt/chrome/chrome --type=renderer --remote-debugging-port=${PORT} --user-data-dir=${DIR}`,
+        isAlive: () => true,
+        kill: (pid) => { killed = pid; },
+        sleep: noop,
+      }),
+      /foreign pid 4242/,
+    );
+    assert.strictEqual(killed, -1, "a helper must never be SIGKILLed as the browser");
+  });
+
+  test("a helper pid that already exited => skipped, not refused", async () => {
+    let calls = 0;
+    await freeCdpPort(PORT, DIR, {
+      listPids: () => (++calls === 1 ? [4242] : []),
+      argvOf: () => `/opt/chrome/chrome --type=renderer --remote-debugging-port=${PORT} --user-data-dir=${DIR}`,
+      isAlive: () => false,
+      sleep: noop,
+    });
   });
 
   // Review SHOULD-FIX 4: a failed probe read as "free" is what launched into a

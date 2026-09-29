@@ -353,7 +353,13 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     ]);
     const cdpInfo = (await response.json()) as { webSocketDebuggerUrl: string };
     wsEndpoint = cdpInfo.webSocketDebuggerUrl;
-    quietBrowser = await chromium.connectOverCDP(wsEndpoint);
+    // Attach into a LOCAL first and only assign quietBrowser once identity is
+    // proven: cleanup() → closeQuietBrowser() fires on SIGINT/SIGTERM and sends
+    // Browser.close to whatever quietBrowser points at. An unverified attach
+    // can be a FOREIGN browser (the 2026-09-29 split-stack shape), so a signal
+    // landing inside the verify window used to close someone else's browser
+    // entirely (issue #4, round-2 review SHOULD-FIX 2).
+    const candidate = await chromium.connectOverCDP(wsEndpoint);
     // If our child already exited, the endpoint that answered belongs to a
     // DIFFERENT browser — the old Chrome can hold 127.0.0.1 while a relaunched
     // one only binds ::1, so a fetch on 127.0.0.1 silently attaches to the
@@ -362,16 +368,17 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     // port is taken (measured 2026-09-29, binds ::1 while the old browser
     // keeps 127.0.0.1), so the identity check below is the real guard.
     if (child.exitCode !== null || child.signalCode !== null) {
-      const foreign = quietBrowser;
+      try { await candidate.close(); } catch { void 0; /* close() on a CDP attach only disconnects — the foreign browser keeps running */ }
       quietBrowser = null;
-      try { await foreign.close(); } catch { void 0; /* close() on a CDP attach only disconnects — the foreign browser keeps running */ }
+      quietChild = null;   // child already exited — drop the dead reference
       console.error(`REFUSING foreign attach on CDP port ${cdpPort}: spawned Chromium exited (code ${child.exitCode ?? child.signalCode}) before attach`);
       throw new Error(
         `Quiet launch: spawned Chromium exited (code ${child.exitCode ?? child.signalCode}) before attach — ` +
         `port ${cdpPort} is served by another browser, refusing to attach to it`,
       );
     }
-    await verifyAttachedBrowserIsOurs(quietBrowser, child);
+    await verifyAttachedBrowserIsOurs(candidate, child);
+    quietBrowser = candidate;
     const defaultContext = quietBrowser.contexts()[0];
     if (!defaultContext) throw new Error("Quiet launch: attached browser has no default context");
     context = defaultContext;
@@ -389,15 +396,28 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     // tri-state: true = proven ours, false = proven foreign, null = couldn't tell
     let ours: boolean | null = null;
     try {
-      const session = await browser.newBrowserCDPSession();
+      // A wedged endpoint can accept the socket but never answer — an
+      // unbounded wait here stalls the single-flight relaunch for EVERY
+      // caller, so each CDP call is capped (issue #4 nit, 2026-09-29).
+      // A timeout lands in the catch like any other failure: ours stays null
+      // and the guid fallback below decides.
+      const session = await withTimeout(
+        browser.newBrowserCDPSession(),
+        TIMEOUTS.SHORT,
+        "newBrowserCDPSession timed out",
+      );
       try {
-        const { processInfo } = await session.send("SystemInfo.getProcessInfo");
+        const { processInfo } = await withTimeout(
+          session.send("SystemInfo.getProcessInfo"),
+          TIMEOUTS.SHORT,
+          "SystemInfo.getProcessInfo timed out",
+        );
         const browserProc = processInfo.find((p): boolean => p.type === "browser");
         if (browserProc) ours = browserProc.id === child.pid;
       } finally {
-        try { await session.detach(); } catch { void 0; /* browser may be gone */ }
+        try { await withTimeout(session.detach(), TIMEOUTS.SHORT, "session detach timed out"); } catch { void 0; /* browser may be gone */ }
       }
-    } catch { void 0; /* method unsupported or session failed — fall back below */ }
+    } catch { void 0; /* method unsupported, timed out, or session failed — fall back below */ }
 
     if (ours === null) {
       // Fallback: compare the browser GUID each stack serves on /json/version.
@@ -449,22 +469,26 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
   async function launchBrowserContext(): Promise<void> {
     if (browserMode !== "user") {
       mkdirSync(userDataDir, { recursive: true });
-      // Resolve the profile lock and CDP port BEFORE touching the profile at
+      // Resolve the CDP port and profile lock BEFORE touching the profile at
       // all — fixChromePreferences used to run first and rewrote a foreign
       // owner's Preferences on the refuse paths (review SHOULD-FIX 7).
       //
-      // resolveSingletonLock (2026-09-29, round 2): stale-lock policy with no
-      // permanent-wedge outcome. Lock naming another hostname, a dead pid, or
-      // a live pid whose argv lacks our exact --user-data-dir (recycled pid —
-      // the old code threw on that forever) is stale and gets cleared. Only an
-      // owner provably carrying our --user-data-dir gets killed.
-      await resolveSingletonLock(userDataDir);
+      // Port classification runs FIRST (issue #4, round-2 review SHOULD-FIX
+      // 3): freeCdpPort can REFUSE on a foreign holder while
+      // resolveSingletonLock can SIGKILL our own stale browser — probing the
+      // port first means a refuse hasn't already destroyed the lock owner.
       // freeCdpPort: SIGKILL only listeners whose argv carries BOTH our
       // --remote-debugging-port and our exact --user-data-dir; a foreign
       // holder refuses the launch with a clear error instead of letting us
       // spawn into a held port and attach to the wrong browser (BLOCKER 2).
       // Runs on first start AND on relaunch via ensureContext.
       await freeCdpPort(cdpPort, userDataDir);
+      // resolveSingletonLock (2026-09-29, round 2): stale-lock policy with no
+      // permanent-wedge outcome. Lock naming another hostname, a dead pid, or
+      // a live pid whose argv lacks our exact --user-data-dir (recycled pid —
+      // the old code threw on that forever) is stale and gets cleared. Only an
+      // owner provably carrying our --user-data-dir gets killed.
+      await resolveSingletonLock(userDataDir);
       fixChromePreferences(userDataDir);
       if (quietLaunch) {
         console.log("Launching browser quietly (no startup window, background tabs)...");
@@ -529,6 +553,24 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
       // context.pages() throws if Chromium died immediately after launch.
       await context.pages();
       console.log("Browser relaunched successfully");
+    }
+  }
+
+  // ensureContext can REFUSE a relaunch (a foreign holder on the CDP port) —
+  // and Express 4 never routes async handler rejections to an error handler,
+  // so an uncaught throw here would leave the request hanging until the
+  // caller's own timeout (issue #4, round-2 review SHOULD-FIX 5). Every route
+  // that needs the browser goes through this one helper: the refusal becomes
+  // a 503 carrying the REFUSING message instead of a silent hang.
+  async function ensureContextOr503(res: Response): Promise<boolean> {
+    try {
+      await ensureContext();
+      return true;
+    } catch (err) {
+      res.status(HTTP.SERVICE_UNAVAILABLE).json({
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
     }
   }
 
@@ -813,8 +855,9 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
           return;
         }
       }
-      // Ensure browser context is alive (auto-relaunch if crashed)
-      await ensureContext();
+      // Ensure browser context is alive (auto-relaunch if crashed); a refused
+      // relaunch answers 503 with the reason instead of hanging the request.
+      if (!(await ensureContextOr503(res))) return;
       // Note who has focus BEFORE the tab exists — creating it will steal focus
       // in headful mode (see frontmostApp/restoreFocus). Headless steals nothing,
       // so don't pay for the check.

@@ -16,6 +16,7 @@ import { resolveField, smartFill } from "./resolve-field.js";
 import { getSnapshotScript } from "./snapshot/browser-script";
 import { CDPConnection, makeUserContext } from "./cdp-page.js";
 import { freeCdpPort, resolveSingletonLock } from "./chrome-profile.js";
+import { fetchWithRetry } from "./fetch-retry.js";
 
 export type { ServeOptions, GetPageResponse, ListPagesResponse, ServerInfoResponse };
 
@@ -45,6 +46,12 @@ const TIMEOUTS = {
   SHORT: 5000,
   MEDIUM: 10000,
   LONG: 30000,
+  // Per-attempt bound for DevTools HTTP probes (fetch-retry.ts) — covers
+  // connect + headers + body. Bare fetch() let a spawned Chrome that accepts
+  // TCP but never answers park each attempt on undici's ~300s timeout; x30
+  // retries meant launchBrowserContext never returned, relaunchInFlight never
+  // settled, and POST /pages hung with no 503 (issue #4 follow-up, 2026-09-29).
+  FETCH_ATTEMPT: 2000,
 } as const;
 
 const LIMITS = {
@@ -149,28 +156,6 @@ async function restoreFocus(appName: string | undefined): Promise<void> {
     }
     await new Promise<void>((resolve: () => void): void => { setTimeout(resolve, FOCUS_REASSERT_POLL_MS); });
   }
-}
-
-// Helper to retry fetch with exponential backoff
-async function fetchWithRetry(
-  url: string,
-  maxRetries: number = DEFAULT_MAX_RETRIES,
-  delayMilliseconds: number = DEFAULT_RETRY_DELAY
-): Promise<globalThis.Response> {
-  let lastError: Error | null = null;
-  for (let i = 0; i < maxRetries; i++) {
-    try {
-      const res = await fetch(url);
-      if (res.ok) return res;
-      throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-    } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err));
-      if (i < maxRetries - 1) {
-        await new Promise<void>((resolve: () => void): void => { setTimeout(resolve, delayMilliseconds * (i + 1)); });
-      }
-    }
-  }
-  throw new Error(`Failed after ${maxRetries} retries: ${lastError?.message}`);
 }
 
 // Helper to add timeout to promises
@@ -347,11 +332,11 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     // If the spawn succeeds the error never fires and this rejection must not
     // linger as an unhandled rejection.
     void spawnError.catch((): void => { void 0; });
-    const response = await Promise.race([
-      fetchWithRetry(`http://127.0.0.1:${cdpPort}/json/version`, 30, 100),
+    const cdpInfo = await Promise.race([
+      fetchWithRetry<{ webSocketDebuggerUrl: string }>(
+        `http://127.0.0.1:${cdpPort}/json/version`, 30, 100, TIMEOUTS.FETCH_ATTEMPT),
       spawnError,
     ]);
-    const cdpInfo = (await response.json()) as { webSocketDebuggerUrl: string };
     wsEndpoint = cdpInfo.webSocketDebuggerUrl;
     // Attach into a LOCAL first and only assign quietBrowser once identity is
     // proven: cleanup() → closeQuietBrowser() fires on SIGINT/SIGTERM and sends
@@ -510,8 +495,9 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
         ],
       });
       console.log("Browser launched with persistent profile...");
-      const cdpResponse = await fetchWithRetry(`http://127.0.0.1:${cdpPort}/json/version`);
-      const cdpInfo = (await cdpResponse.json()) as { webSocketDebuggerUrl: string };
+      const cdpInfo = await fetchWithRetry<{ webSocketDebuggerUrl: string }>(
+        `http://127.0.0.1:${cdpPort}/json/version`,
+        DEFAULT_MAX_RETRIES, DEFAULT_RETRY_DELAY, TIMEOUTS.FETCH_ATTEMPT);
       wsEndpoint = cdpInfo.webSocketDebuggerUrl;
     }
   }
@@ -597,8 +583,9 @@ export async function serve(options: ServeOptions = {}): Promise<DevBrowserServe
     console.log("(Make sure Chrome is running with: --remote-debugging-port=9222)");
 
     try {
-      const cdpResponse = await fetchWithRetry(`http://127.0.0.1:${userCdpPort}/json/version`);
-      const cdpInfo = (await cdpResponse.json()) as { webSocketDebuggerUrl: string };
+      const cdpInfo = await fetchWithRetry<{ webSocketDebuggerUrl: string }>(
+        `http://127.0.0.1:${userCdpPort}/json/version`,
+        DEFAULT_MAX_RETRIES, DEFAULT_RETRY_DELAY, TIMEOUTS.FETCH_ATTEMPT);
       wsEndpoint = cdpInfo.webSocketDebuggerUrl;
 
       // Raw CDP single-target driver — NOT Playwright's connectOverCDP, which
